@@ -4,6 +4,8 @@ Codex Remote is a Flutter app (iOS + macOS) that lets you run Codex CLI “sessi
 
 It’s designed for concurrency: you can keep multiple projects and multiple sessions running at once, switch between them, and resume past conversations by thread ID.
 
+![Codex Remote screenshot](assets/screenshot.png)
+
 ## Features
 
 - **Remote mode (iOS + macOS)**: connect to `username@host` over SSH and run `codex exec`.
