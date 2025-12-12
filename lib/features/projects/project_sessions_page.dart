@@ -5,6 +5,7 @@ import '../../models/project_tab.dart';
 import '../session/codex_chat_view.dart';
 import '../session/session_controller.dart';
 import '../../services/conversation_store.dart';
+import '../../services/active_session_service.dart';
 import '../../models/conversation.dart';
 import 'project_args.dart';
 import 'project_sessions_controller.dart';
@@ -22,6 +23,7 @@ class _ProjectSessionsPageState extends State<ProjectSessionsPage>
   TabController? _tabs;
   Worker? _tabsWorker;
   ConversationStore get _conversations => Get.find<ConversationStore>();
+  ActiveSessionService get _active => Get.find<ActiveSessionService>();
 
   @override
   void initState() {
@@ -33,6 +35,10 @@ class _ProjectSessionsPageState extends State<ProjectSessionsPage>
     _tabsWorker = ever<List<ProjectTab>>(controller.tabs, (_) {
       _recreateTabController();
     });
+
+    ever<int>(controller.activeIndex, (_) => _updateActiveSession());
+    ever<List<ProjectTab>>(controller.tabs, (_) => _updateActiveSession());
+    _updateActiveSession();
   }
 
   void _recreateTabController() {
@@ -50,10 +56,29 @@ class _ProjectSessionsPageState extends State<ProjectSessionsPage>
     setState(() {});
   }
 
+  void _updateActiveSession() {
+    final items = controller.tabs;
+    if (items.isEmpty) {
+      _active.setActive(null);
+      return;
+    }
+    final idx = controller.activeIndex.value.clamp(0, items.length - 1);
+    final tab = items[idx];
+    _active.setActive(
+      ActiveSessionRef(
+        targetKey: controller.args.target.targetKey,
+        projectPath: controller.args.project.path,
+        tabId: tab.id,
+      ),
+    );
+  }
+
   @override
   void dispose() {
     _tabsWorker?.dispose();
     _tabs?.dispose();
+    // Leaving this project view.
+    _active.setActive(null);
     // Disposes tab SessionControllers.
     for (final t in controller.tabs) {
       Get.delete<SessionController>(tag: t.id, force: true);

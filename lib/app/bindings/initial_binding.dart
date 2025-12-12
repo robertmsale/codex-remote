@@ -4,12 +4,16 @@ import '../../features/connection/connection_controller.dart';
 import '../../services/connection_history_service.dart';
 import '../../services/codex_session_store.dart';
 import '../../services/conversation_store.dart';
+import '../../services/app_lifecycle_service.dart';
 import '../../services/local_shell_service.dart';
+import '../../services/active_session_service.dart';
 import '../../services/secure_storage_service.dart';
 import '../../services/ssh_key_service.dart';
 import '../../services/ssh_service.dart';
 import '../../services/project_store.dart';
 import '../../services/project_tabs_store.dart';
+import '../../services/notification_service.dart';
+import '../../services/remote_jobs_store.dart';
 
 class InitialBinding extends Bindings {
   @override
@@ -24,6 +28,12 @@ class InitialBinding extends Bindings {
     Get.put<ProjectTabsStore>(ProjectTabsStore(), permanent: true);
     Get.put<ConversationStore>(ConversationStore(), permanent: true);
     Get.put<LocalShellService>(LocalShellService(), permanent: true);
+    Get.put<NotificationService>(NotificationService(), permanent: true);
+    Get.put<RemoteJobsStore>(RemoteJobsStore(), permanent: true);
+    Get.put<ActiveSessionService>(ActiveSessionService(), permanent: true);
+    final lifecycle =
+        Get.put<AppLifecycleService>(AppLifecycleService(), permanent: true);
+    lifecycle.start();
 
     Get.lazyPut<ConnectionController>(() => ConnectionController());
   }

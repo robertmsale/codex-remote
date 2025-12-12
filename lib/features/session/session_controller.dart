@@ -13,7 +13,11 @@ import '../../codex/codex_output_schema.dart';
 import '../../services/codex_session_store.dart';
 import '../../services/conversation_store.dart';
 import '../../services/local_shell_service.dart';
+import '../../services/active_session_service.dart';
+import '../../services/app_lifecycle_service.dart';
+import '../../services/notification_service.dart';
 import '../../services/secure_storage_service.dart';
+import '../../services/remote_jobs_store.dart';
 import '../../services/ssh_service.dart';
 import '../projects/target_args.dart';
 
@@ -58,6 +62,10 @@ class SessionController extends GetxController {
   SecureStorageService get _storage => Get.find<SecureStorageService>();
   SshService get _ssh => Get.find<SshService>();
   LocalShellService get _localShell => Get.find<LocalShellService>();
+  NotificationService get _notifications => Get.find<NotificationService>();
+  ActiveSessionService get _activeSession => Get.find<ActiveSessionService>();
+  AppLifecycleService get _lifecycle => Get.find<AppLifecycleService>();
+  RemoteJobsStore get _remoteJobs => Get.find<RemoteJobsStore>();
 
   static const _me = 'user';
   static const _codex = 'codex';
@@ -528,6 +536,24 @@ class SessionController extends GetxController {
         tabId: tabId,
         remoteJobId: remoteJobId,
       );
+      try {
+        final profile = target.profile;
+        if (profile != null) {
+          await _remoteJobs.upsert(
+            RemoteJobRecord(
+              targetKey: target.targetKey,
+              host: profile.host,
+              port: profile.port,
+              username: profile.username,
+              projectPath: projectPath,
+              tabId: tabId,
+              remoteJobId: remoteJobId,
+              threadId: threadId.value,
+              startedAtMsUtc: DateTime.now().toUtc().millisecondsSinceEpoch,
+            ),
+          );
+        }
+      } catch (_) {}
       await _insertEvent(type: 'remote_job', text: remoteJobId);
     } catch (e) {
       try {
@@ -653,6 +679,13 @@ class SessionController extends GetxController {
       projectPath: projectPath,
       tabId: tabId,
     );
+    try {
+      await _remoteJobs.remove(
+        targetKey: target.targetKey,
+        projectPath: projectPath,
+        tabId: tabId,
+      );
+    } catch (_) {}
     _remoteJobId = null;
   }
 
@@ -709,6 +742,13 @@ class SessionController extends GetxController {
           projectPath: projectPath,
           tabId: tabId,
         );
+        try {
+          await _remoteJobs.remove(
+            targetKey: target.targetKey,
+            projectPath: projectPath,
+            tabId: tabId,
+          );
+        } catch (_) {}
         _remoteJobId = null;
       }
     } catch (_) {
@@ -802,6 +842,27 @@ class SessionController extends GetxController {
           threadId: id,
           preview: _lastUserPromptPreview,
         );
+        if (!target.local) {
+          try {
+            final profile = target.profile;
+            final jobId = _remoteJobId;
+            if (profile != null && jobId != null && jobId.isNotEmpty) {
+              await _remoteJobs.upsert(
+                RemoteJobRecord(
+                  targetKey: target.targetKey,
+                  host: profile.host,
+                  port: profile.port,
+                  username: profile.username,
+                  projectPath: projectPath,
+                  tabId: tabId,
+                  remoteJobId: jobId,
+                  threadId: id,
+                  startedAtMsUtc: DateTime.now().toUtc().millisecondsSinceEpoch,
+                ),
+              );
+            }
+          } catch (_) {}
+        }
       }
       await _insertEvent(type: type, text: 'thread_id=${id ?? ''}');
       return;
@@ -810,12 +871,40 @@ class SessionController extends GetxController {
     if (type == 'turn.started' || type == 'turn.completed' || type == 'turn.failed') {
       await _insertEvent(type: type, text: _compact(event));
 
+      if (type == 'turn.completed' || type == 'turn.failed') {
+        // Best-effort: notify even if user is on a different screen/tab.
+        try {
+          final active = _activeSession.active;
+          final isActiveView = active != null &&
+              active.targetKey == target.targetKey &&
+              active.projectPath == projectPath &&
+              active.tabId == tabId;
+
+          // Do not notify if the user is actively looking at this chat.
+          if (!(_lifecycle.isForeground && isActiveView)) {
+            await _notifications.notifyTurnFinished(
+              projectPath: projectPath,
+              success: type == 'turn.completed',
+              tabId: tabId,
+              threadId: threadId.value,
+            );
+          }
+        } catch (_) {}
+      }
+
       if (!target.local && (type == 'turn.completed' || type == 'turn.failed')) {
         await _sessionStore.clearRemoteJobId(
           targetKey: target.targetKey,
           projectPath: projectPath,
           tabId: tabId,
         );
+        try {
+          await _remoteJobs.remove(
+            targetKey: target.targetKey,
+            projectPath: projectPath,
+            tabId: tabId,
+          );
+        } catch (_) {}
         _remoteJobId = null;
         _cancelCurrent = null;
         isRunning.value = false;
