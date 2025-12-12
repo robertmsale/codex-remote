@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 class CodexCommand {
   final List<String> args;
   final String stdin;
@@ -9,6 +11,24 @@ class CodexCommand {
 }
 
 abstract final class CodexCommandBuilder {
+  static const String defaultDeveloperInstructions = '''
+You are running as Codex CLI in non-interactive mode.
+
+You MUST produce a final response that is valid JSON matching the schema passed via `--output-schema`.
+- Put all user-visible content in `message` (markdown allowed).
+- Always include `commit_message` as a concise, single-line git commit message (imperative mood).
+  - The client may run `git add -A && git commit -m "<commit_message>"` only if there are changes.
+- If you need a user decision, return `actions` as button options:
+  - Each action has `id`, `label`, and `value`.
+  - When tapped, the client sends `value` as the next user message.
+
+Do NOT add extra wrapper text outside the JSON object.
+''';
+
+  /// Encodes plain text as a TOML basic string value (including surrounding quotes),
+  /// suitable for `codex exec -c key=value`.
+  static String tomlString(String value) => jsonEncode(value);
+
   static CodexCommand build({
     required String prompt,
     required String schemaPath,

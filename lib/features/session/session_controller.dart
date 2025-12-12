@@ -329,9 +329,10 @@ class SessionController extends GetxController {
           resumeThreadId: threadId.value,
           jsonl: true,
           cd: null,
-          configOverrides: const {
-            // Avoid repeating/adding global developer instructions on every turn.
-            'developer_instructions': '""',
+          configOverrides: {
+            'developer_instructions': CodexCommandBuilder.tomlString(
+              CodexCommandBuilder.defaultDeveloperInstructions,
+            ),
           },
         );
 
@@ -410,9 +411,10 @@ class SessionController extends GetxController {
         resumeThreadId: threadId.value,
         jsonl: true,
         cd: projectPath,
-        configOverrides: const {
-          // Avoid repeating/adding global developer instructions on every turn.
-          'developer_instructions': '""',
+        configOverrides: {
+          'developer_instructions': CodexCommandBuilder.tomlString(
+            CodexCommandBuilder.defaultDeveloperInstructions,
+          ),
         },
       );
 
