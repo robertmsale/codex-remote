@@ -605,22 +605,19 @@ class SessionController extends GetxController {
       final stderrSub = launchProc.stderrLines.listen(stderr.add);
 
       int? exit;
+      Object? exitError;
       try {
         exit = await launchProc.exitCode.timeout(const Duration(seconds: 10));
+      } on TimeoutException catch (e) {
+        exitError = e;
       } finally {
         await stdoutSub.cancel();
         await stderrSub.cancel();
         _remoteLaunchProc = null;
       }
 
-      if ((exit ?? 1) != 0) {
-        throw StateError(
-          'Remote launch failed (exit=$exit): ${(stderr.join('\n')).trim().isEmpty ? (stdout.join('\n')).trim() : (stderr.join('\n')).trim()}',
-        );
-      }
-
       String? jobLine;
-      for (final line in stdout.reversed) {
+      for (final line in [...stdout, ...stderr].reversed) {
         if (line.startsWith('CODEX_REMOTE_JOB=')) {
           jobLine = line;
           break;
@@ -643,6 +640,16 @@ class SessionController extends GetxController {
         } catch (_) {}
       }
       if (remoteJobId == null || remoteJobId.isEmpty) {
+        if ((exit ?? 1) != 0) {
+          throw StateError(
+            'Remote launch failed (exit=$exit): ${(stderr.join('\n')).trim().isEmpty ? (stdout.join('\n')).trim() : (stderr.join('\n')).trim()}',
+          );
+        }
+        if (exitError != null) {
+          throw StateError(
+            'Remote launch failed (timeout): ${(stderr.join('\n')).trim().isEmpty ? (stdout.join('\n')).trim() : (stderr.join('\n')).trim()}',
+          );
+        }
         throw StateError('Remote launch did not return a job id.');
       }
 
@@ -1370,6 +1377,19 @@ class SessionController extends GetxController {
 
     if (type == 'turn.started' || type == 'turn.completed' || type == 'turn.failed') {
       await _insertEvent(type: type, text: _compact(event));
+
+      if (type == 'turn.started' && !isRunning.value) {
+        isRunning.value = true;
+        if (!target.local) {
+          _cancelCurrent ??= () {
+            _stopRemoteJob().whenComplete(() {
+              _cancelTailOnly();
+              _cancelCurrent = null;
+              isRunning.value = false;
+            });
+          };
+        }
+      }
 
       if (type == 'turn.completed' || type == 'turn.failed') {
         // Best-effort: notify even if user is on a different screen/tab.
