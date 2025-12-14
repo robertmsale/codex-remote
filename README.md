@@ -133,7 +133,7 @@ Currently the app supports **one global key**.
 
 ## Data & Security
 
-- Private keys are stored using `flutter_secure_storage` (Apple Keychain).
+- Private keys are stored using `flutter_secure_storage`.
 - Passwords are never stored.
 - Session logs are written into the project under `.field_exec/`.
   - The app automatically adds `.field_exec/` to `.git/info/exclude` before auto-commit so logs/schema don’t get committed.

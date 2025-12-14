@@ -109,7 +109,7 @@ class ConnectionPage extends GetView<ConnectionControllerBase> {
                     decoration: const InputDecoration(
                       labelText: 'Private key PEM (optional)',
                       helperText:
-                          'Stored in Apple Keychain via flutter_secure_storage.',
+                          'Stored in System Keychain via flutter_secure_storage.',
                     ),
                   ),
                   const SizedBox(height: 12),
