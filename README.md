@@ -6,8 +6,6 @@ FieldExec is a Flutter app (iOS + Android + macOS) that lets you run Codex CLI â
 
 Itâ€™s designed for concurrency: you can keep multiple projects and multiple sessions running at once, switch between them, and resume past conversations by thread ID.
 
-![FieldExec screenshot](assets/screenshot.png)
-
 ## Features
 
 - **Remote mode (iOS + Android + macOS)**: connect to `username@host` over SSH and run `codex exec`.
@@ -50,7 +48,7 @@ On macOS local mode, the app runs `codex` locally and streams stdout/stderr into
 flutter pub get
 rinf gen
 flutter devices
-flutter run -d <DEVICE_ID>
+flutter run -d <DEVICE_ID> --release
 ```
 
 ## Setup
