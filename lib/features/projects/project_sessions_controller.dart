@@ -561,6 +561,7 @@ done
     Get.offNamed(
       DesignRoutes.project,
       arguments: ProjectArgs(target: args.target, project: project),
+      preventDuplicates: false,
     );
   }
 

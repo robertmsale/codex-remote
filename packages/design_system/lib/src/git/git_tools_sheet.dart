@@ -95,7 +95,7 @@ git worktree list --porcelain | awk 'BEGIN{RS="";FS="\\n"}{
   path=""; head=""; branch=""; detached=0;
   for (i=1;i<=NF;i++){
     line=\$i;
-    if (index(line,"worktree ")==1) { path=substr(line,9); }
+    if (index(line,"worktree ")==1) { path=substr(line,10); }
     else if (index(line,"HEAD ")==1) { head=substr(line,6); }
     else if (index(line,"branch ")==1) { branch=substr(line,8); }
     else if (line=="detached") { detached=1; }
