@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
@@ -32,6 +33,10 @@ class SshCommandProcess {
 }
 
 class SshService {
+  static const defaultConnectTimeout = Duration(seconds: 10);
+  static const defaultAuthTimeout = Duration(seconds: 10);
+  static const defaultCommandTimeout = Duration(minutes: 2);
+
   static String _shellEscape(String s) {
     if (s.isEmpty) return "''";
     final safe = RegExp(r'^[A-Za-z0-9_./:=@-]+$');
@@ -39,16 +44,17 @@ class SshService {
     return "'${s.replaceAll("'", "'\\''")}'";
   }
 
-  Future<String> runCommand({
+  Future<SSHClient> _connectClient({
     required String host,
     required int port,
     required String username,
     String? password,
     String? privateKeyPem,
     String? privateKeyPassphrase,
-    required String command,
+    required Duration connectTimeout,
+    required Duration authTimeout,
   }) async {
-    final socket = await SSHSocket.connect(host, port);
+    final socket = await SSHSocket.connect(host, port).timeout(connectTimeout);
 
     final identities = (privateKeyPem == null || privateKeyPem.trim().isEmpty)
         ? <SSHKeyPair>[]
@@ -61,12 +67,50 @@ class SshService {
       onPasswordRequest: password == null ? null : () => password,
     );
 
-    try {
-      final bytes = await client.run(command);
-      return utf8.decode(bytes);
-    } finally {
-      client.close();
+    await client.authenticated.timeout(authTimeout);
+    return client;
+  }
+
+  Future<T> _withRetry<T>(int retries, Future<T> Function() fn) async {
+    for (var attempt = 0; attempt <= retries; attempt++) {
+      try {
+        return await fn();
+      } catch (e) {
+        if (e is TimeoutException) rethrow;
+        if (attempt >= retries) rethrow;
+        await Future<void>.delayed(const Duration(milliseconds: 150));
+      }
     }
+    throw StateError('SSH operation failed');
+  }
+
+  Future<String> runCommand({
+    required String host,
+    required int port,
+    required String username,
+    String? password,
+    String? privateKeyPem,
+    String? privateKeyPassphrase,
+    required String command,
+    Duration connectTimeout = defaultConnectTimeout,
+    Duration authTimeout = defaultAuthTimeout,
+    Duration timeout = defaultCommandTimeout,
+    int retries = 1,
+  }) async {
+    final res = await runCommandWithResult(
+      host: host,
+      port: port,
+      username: username,
+      password: password,
+      privateKeyPem: privateKeyPem,
+      privateKeyPassphrase: privateKeyPassphrase,
+      command: command,
+      connectTimeout: connectTimeout,
+      authTimeout: authTimeout,
+      timeout: timeout,
+      retries: retries,
+    );
+    return res.stdout;
   }
 
   Future<SshCommandResult> runCommandWithResult({
@@ -78,43 +122,59 @@ class SshService {
     String? privateKeyPassphrase,
     required String command,
     String? stdin,
+    Duration connectTimeout = defaultConnectTimeout,
+    Duration authTimeout = defaultAuthTimeout,
+    Duration timeout = defaultCommandTimeout,
+    int retries = 1,
   }) async {
-    final socket = await SSHSocket.connect(host, port);
+    return _withRetry(retries, () async {
+      SSHClient? client;
+      SSHSession? session;
+      try {
+        client = await _connectClient(
+          host: host,
+          port: port,
+          username: username,
+          password: password,
+          privateKeyPem: privateKeyPem,
+          privateKeyPassphrase: privateKeyPassphrase,
+          connectTimeout: connectTimeout,
+          authTimeout: authTimeout,
+        );
 
-    final identities = (privateKeyPem == null || privateKeyPem.trim().isEmpty)
-        ? <SSHKeyPair>[]
-        : SSHKeyPair.fromPem(privateKeyPem, privateKeyPassphrase).toList();
+        session = await client.execute(command);
 
-    final client = SSHClient(
-      socket,
-      username: username,
-      identities: identities.isEmpty ? null : identities,
-      onPasswordRequest: password == null ? null : () => password,
-    );
+        if (stdin != null && stdin.isNotEmpty) {
+          session.stdin.add(Uint8List.fromList(utf8.encode(stdin)));
+        }
+        await session.stdin.close();
 
-    final session = await client.execute(command);
-    try {
-      if (stdin != null && stdin.isNotEmpty) {
-        session.stdin.add(Uint8List.fromList(utf8.encode(stdin)));
+        final outBytes = <int>[];
+        final errBytes = <int>[];
+        final outDone = session.stdout.listen(outBytes.addAll).asFuture<void>();
+        final errDone = session.stderr.listen(errBytes.addAll).asFuture<void>();
+
+        await Future.wait([session.done, outDone, errDone]).timeout(timeout);
+
+        return SshCommandResult(
+          stdout: utf8.decode(outBytes, allowMalformed: true),
+          stderr: utf8.decode(errBytes, allowMalformed: true),
+          exitCode: session.exitCode,
+        );
+      } on TimeoutException {
+        try {
+          session?.kill(SSHSignal.KILL);
+        } catch (_) {}
+        try {
+          session?.close();
+        } catch (_) {}
+        rethrow;
+      } finally {
+        try {
+          client?.close();
+        } catch (_) {}
       }
-      await session.stdin.close();
-
-      final outBytes = <int>[];
-      final errBytes = <int>[];
-      await Future.wait([
-        session.stdout.listen(outBytes.addAll).asFuture<void>(),
-        session.stderr.listen(errBytes.addAll).asFuture<void>(),
-      ]);
-
-      await session.done;
-      return SshCommandResult(
-        stdout: utf8.decode(outBytes, allowMalformed: true),
-        stderr: utf8.decode(errBytes, allowMalformed: true),
-        exitCode: session.exitCode,
-      );
-    } finally {
-      client.close();
-    }
+    });
   }
 
   Future<void> writeRemoteFile({
@@ -126,35 +186,51 @@ class SshService {
     String? privateKeyPassphrase,
     required String remotePath,
     required String contents,
+    Duration connectTimeout = defaultConnectTimeout,
+    Duration authTimeout = defaultAuthTimeout,
+    Duration timeout = defaultCommandTimeout,
+    int retries = 1,
   }) async {
-    final socket = await SSHSocket.connect(host, port);
+    await _withRetry(retries, () async {
+      SSHClient? client;
+      SSHSession? session;
+      try {
+        client = await _connectClient(
+          host: host,
+          port: port,
+          username: username,
+          password: password,
+          privateKeyPem: privateKeyPem,
+          privateKeyPassphrase: privateKeyPassphrase,
+          connectTimeout: connectTimeout,
+          authTimeout: authTimeout,
+        );
 
-    final identities = (privateKeyPem == null || privateKeyPem.trim().isEmpty)
-        ? <SSHKeyPair>[]
-        : SSHKeyPair.fromPem(privateKeyPem, privateKeyPassphrase).toList();
+        final remoteDir = remotePath.contains('/')
+            ? remotePath.substring(0, remotePath.lastIndexOf('/'))
+            : '.';
 
-    final client = SSHClient(
-      socket,
-      username: username,
-      identities: identities.isEmpty ? null : identities,
-      onPasswordRequest: password == null ? null : () => password,
-    );
-
-    final remoteDir = remotePath.contains('/')
-        ? remotePath.substring(0, remotePath.lastIndexOf('/'))
-        : '.';
-
-    // Avoid complex quoting by writing via stdin.
-    final command =
-        'mkdir -p ${_shellEscape(remoteDir)} && cat > ${_shellEscape(remotePath)}';
-    final session = await client.execute(command);
-    try {
-      session.stdin.add(Uint8List.fromList(utf8.encode(contents)));
-      await session.stdin.close();
-      await session.done;
-    } finally {
-      client.close();
-    }
+        // Avoid complex quoting by writing via stdin.
+        final command =
+            'mkdir -p ${_shellEscape(remoteDir)} && cat > ${_shellEscape(remotePath)}';
+        session = await client.execute(command);
+        session.stdin.add(Uint8List.fromList(utf8.encode(contents)));
+        await session.stdin.close();
+        await session.done.timeout(timeout);
+      } on TimeoutException {
+        try {
+          session?.kill(SSHSignal.KILL);
+        } catch (_) {}
+        try {
+          session?.close();
+        } catch (_) {}
+        rethrow;
+      } finally {
+        try {
+          client?.close();
+        } catch (_) {}
+      }
+    });
   }
 
   Future<SshCommandProcess> startCommand({
@@ -166,18 +242,18 @@ class SshService {
     String? privateKeyPassphrase,
     required String command,
     String? stdin,
+    Duration connectTimeout = defaultConnectTimeout,
+    Duration authTimeout = defaultAuthTimeout,
   }) async {
-    final socket = await SSHSocket.connect(host, port);
-
-    final identities = (privateKeyPem == null || privateKeyPem.trim().isEmpty)
-        ? <SSHKeyPair>[]
-        : SSHKeyPair.fromPem(privateKeyPem, privateKeyPassphrase).toList();
-
-    final client = SSHClient(
-      socket,
+    final client = await _connectClient(
+      host: host,
+      port: port,
       username: username,
-      identities: identities.isEmpty ? null : identities,
-      onPasswordRequest: password == null ? null : () => password,
+      password: password,
+      privateKeyPem: privateKeyPem,
+      privateKeyPassphrase: privateKeyPassphrase,
+      connectTimeout: connectTimeout,
+      authTimeout: authTimeout,
     );
 
     final session = await client.execute(command);
@@ -186,6 +262,9 @@ class SshService {
     void cancel() {
       if (cancelled) return;
       cancelled = true;
+      try {
+        session.kill(SSHSignal.KILL);
+      } catch (_) {}
       try {
         session.close();
       } catch (_) {}
@@ -196,8 +275,8 @@ class SshService {
 
     if (stdin != null && stdin.isNotEmpty) {
       session.stdin.add(Uint8List.fromList(utf8.encode(stdin)));
-      await session.stdin.close();
     }
+    await session.stdin.close();
 
     final done = session.done.whenComplete(() {
       try {
@@ -262,17 +341,21 @@ class SshService {
       "grep -qxF '$escaped' ~/.ssh/authorized_keys || printf '%s\\n' '$escaped' >> ~/.ssh/authorized_keys",
     ].join('; ');
 
-    final socket = await SSHSocket.connect(host, port);
-    final client = SSHClient(
-      socket,
-      username: username,
-      onPasswordRequest: () => password,
-    );
-
+    SSHClient? client;
     try {
-      await client.run(remoteCommand, stdout: false);
+      client = await _connectClient(
+        host: host,
+        port: port,
+        username: username,
+        password: password,
+        connectTimeout: defaultConnectTimeout,
+        authTimeout: defaultAuthTimeout,
+      );
+      await client
+          .run(remoteCommand, stdout: false)
+          .timeout(defaultCommandTimeout);
     } finally {
-      client.close();
+      client?.close();
     }
   }
 }

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:convert';
 
@@ -45,7 +46,10 @@ class ProjectSessionsController extends ProjectSessionsControllerBase {
     super.onInit();
     _load();
     _activeWorker1 = ever<int>(activeIndex, (_) => _updateActiveSession());
-    _activeWorker2 = ever<List<ProjectTab>>(tabs, (_) => _updateActiveSession());
+    _activeWorker2 = ever<List<ProjectTab>>(
+      tabs,
+      (_) => _updateActiveSession(),
+    );
     _updateActiveSession();
   }
 
@@ -57,7 +61,8 @@ class ProjectSessionsController extends ProjectSessionsControllerBase {
     super.onClose();
   }
 
-  String _sessionTag(String tabId) => '${args.target.targetKey}|${args.project.path}|$tabId';
+  String _sessionTag(String tabId) =>
+      '${args.target.targetKey}|${args.project.path}|$tabId';
 
   @override
   SessionControllerBase sessionForTab(ProjectTab tab) {
@@ -228,7 +233,9 @@ class ProjectSessionsController extends ProjectSessionsControllerBase {
     }
     if (!Platform.isMacOS) return const [];
 
-    final sessionsDir = Directory('${args.project.path}/.codex_remote/sessions');
+    final sessionsDir = Directory(
+      '${args.project.path}/.codex_remote/sessions',
+    );
     if (!await sessionsDir.exists()) return const [];
 
     final entries = await sessionsDir.list(followLinks: false).toList();
@@ -275,7 +282,8 @@ class ProjectSessionsController extends ProjectSessionsControllerBase {
     const tail = '__CODEX_REMOTE_LOG_TAIL__';
     const end = '__CODEX_REMOTE_LOG_END__';
 
-    final script = '''
+    final script =
+        '''
 DIR=".codex_remote/sessions"
 files=\$(ls -t "\$DIR"/*.log 2>/dev/null | grep -v '\\\\.stderr\\\\.log\$' | head -n 80 || true)
 printf "%s\\n" "\$files" | while IFS= read -r f; do
@@ -371,7 +379,10 @@ done
     return out;
   }
 
-  static Future<String> _readHeadUtf8(File file, {required int maxBytes}) async {
+  static Future<String> _readHeadUtf8(
+    File file, {
+    required int maxBytes,
+  }) async {
     final raf = await file.open();
     try {
       final len = await raf.length();
@@ -384,7 +395,10 @@ done
     }
   }
 
-  static Future<String> _readTailUtf8(File file, {required int maxBytes}) async {
+  static Future<String> _readTailUtf8(
+    File file, {
+    required int maxBytes,
+  }) async {
     final raf = await file.open();
     try {
       final len = await raf.length();
@@ -428,7 +442,9 @@ done
           final t = map['text']?.toString() ?? '';
           final trimmed = t.trim();
           if (trimmed.isNotEmpty) {
-            preview = trimmed.length > 80 ? '${trimmed.substring(0, 80)}…' : trimmed;
+            preview = trimmed.length > 80
+                ? '${trimmed.substring(0, 80)}…'
+                : trimmed;
             break;
           }
         }
@@ -445,10 +461,9 @@ done
       final items = tabs;
       if (items.isEmpty) return;
       final active = items[activeIndex.value.clamp(0, items.length - 1)];
-      await sessionForTab(active).resumeThreadById(
-        conversation.threadId,
-        preview: conversation.preview,
-      );
+      await sessionForTab(
+        active,
+      ).resumeThreadById(conversation.threadId, preview: conversation.preview);
       return;
     }
 
@@ -456,11 +471,11 @@ done
     if (idx == -1) {
       final title = conversation.preview.isNotEmpty
           ? (conversation.preview.length > 18
-              ? '${conversation.preview.substring(0, 18)}…'
-              : conversation.preview)
+                ? '${conversation.preview.substring(0, 18)}…'
+                : conversation.preview)
           : (conversation.threadId.isNotEmpty
-              ? conversation.threadId.substring(0, 8)
-              : 'Tab ${tabs.length + 1}');
+                ? conversation.threadId.substring(0, 8)
+                : 'Tab ${tabs.length + 1}');
       final tab = ProjectTab(id: tabId, title: title);
       tabs.add(tab);
       _ensureSessionControllers();
@@ -498,7 +513,10 @@ done
       } catch (_) {}
     }
 
-    await session.resumeThreadById(conversation.threadId, preview: conversation.preview);
+    await session.resumeThreadById(
+      conversation.threadId,
+      preview: conversation.preview,
+    );
     await session.reattachIfNeeded(backfillLines: 200);
   }
 
@@ -555,11 +573,10 @@ done
           stderr: 'Local mode is only supported on macOS.',
         );
       }
-      final res = await Process.run(
-        '/bin/sh',
-        ['-c', cmd],
-        workingDirectory: args.project.path,
-      );
+      final res = await Process.run('/bin/sh', [
+        '-c',
+        cmd,
+      ], workingDirectory: args.project.path);
       return RunCommandResult(
         exitCode: res.exitCode,
         stdout: (res.stdout as Object?)?.toString() ?? '',
@@ -576,7 +593,9 @@ done
       );
     }
 
-    final pem = await _storage.read(key: SecureStorageService.sshPrivateKeyPemKey);
+    final pem = await _storage.read(
+      key: SecureStorageService.sshPrivateKeyPemKey,
+    );
     if (pem == null || pem.trim().isEmpty) {
       return const RunCommandResult(
         exitCode: 1,
@@ -587,6 +606,8 @@ done
 
     final remoteCmd = 'cd ${_shQuote(args.project.path)} && $cmd';
 
+    const timeout = Duration(seconds: 60);
+
     Future<SshCommandResult> runOnce({String? password}) {
       return _ssh.runCommandWithResult(
         host: profile.host,
@@ -595,18 +616,33 @@ done
         privateKeyPem: pem,
         password: password,
         command: 'sh -c ${_shQuote(remoteCmd)}',
+        timeout: timeout,
       );
     }
 
     SshCommandResult result;
     try {
       result = await runOnce(password: _sshPassword);
+    } on TimeoutException {
+      return const RunCommandResult(
+        exitCode: 124,
+        stdout: '',
+        stderr: 'Command timed out after 60 seconds.',
+      );
     } catch (_) {
       if (_sshPassword == null) {
         final pw = await _promptForPassword();
         if (pw == null || pw.isEmpty) rethrow;
         _sshPassword = pw;
-        result = await runOnce(password: _sshPassword);
+        try {
+          result = await runOnce(password: _sshPassword);
+        } on TimeoutException {
+          return const RunCommandResult(
+            exitCode: 124,
+            stdout: '',
+            stderr: 'Command timed out after 60 seconds.',
+          );
+        }
       } else {
         rethrow;
       }

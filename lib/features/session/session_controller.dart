@@ -45,6 +45,9 @@ class SessionController extends SessionControllerBase {
   CustomMessage? _pendingActionsMessage;
   String _lastUserPromptPreview = '';
   String? _sshPassword;
+  int _logLineCursor = 0;
+  Timer? _cursorSaveTimer;
+  Future<void> _cursorSaveQueue = Future.value();
 
   static const _codexRemoteDir = '.codex_remote';
   String get _schemaRelPath => '$_codexRemoteDir/output-schema.json';
@@ -99,13 +102,7 @@ class SessionController extends SessionControllerBase {
   @override
   void onInit() {
     super.onInit();
-    _loadThreadId();
-    _loadRemoteJobId();
-    if (!target.local) {
-      _maybeReattachRemote();
-    } else {
-      _maybeReattachLocal();
-    }
+    _initAsync();
     _lifecycleWorker = ever<AppLifecycleState?>(_lifecycle.stateRx, (state) {
       if (state == AppLifecycleState.resumed) {
         _onAppResumed();
@@ -117,7 +114,8 @@ class SessionController extends SessionControllerBase {
     });
     _activeWorker = ever<ActiveSessionRef?>(_activeSession.activeRx, (ref) {
       if (target.local) return;
-      final isActive = ref != null &&
+      final isActive =
+          ref != null &&
           ref.targetKey == target.targetKey &&
           ref.projectPath == projectPath &&
           ref.tabId == tabId;
@@ -135,6 +133,9 @@ class SessionController extends SessionControllerBase {
   void onClose() {
     _lifecycleWorker?.dispose();
     _activeWorker?.dispose();
+    try {
+      _cursorSaveTimer?.cancel();
+    } catch (_) {}
     _cancelTailOnly();
     _cancelLocalTailOnly();
     chatController.dispose();
@@ -221,8 +222,9 @@ class SessionController extends SessionControllerBase {
     if (trimmed.isEmpty) return;
 
     await _consumePendingActions();
-    _lastUserPromptPreview =
-        trimmed.length > 80 ? '${trimmed.substring(0, 80)}…' : trimmed;
+    _lastUserPromptPreview = trimmed.length > 80
+        ? '${trimmed.substring(0, 80)}…'
+        : trimmed;
     inputController.clear();
 
     final userMessage = Message.text(
@@ -315,7 +317,10 @@ class SessionController extends SessionControllerBase {
 
     final rawImages = meta['images'];
     if (rawImages is! List) return;
-    final images = rawImages.whereType<Map>().map((m) => Map<String, Object?>.from(m)).toList();
+    final images = rawImages
+        .whereType<Map>()
+        .map((m) => Map<String, Object?>.from(m))
+        .toList();
     if (images.isEmpty) return;
 
     final indices = <int>[];
@@ -341,7 +346,12 @@ class SessionController extends SessionControllerBase {
 
       rawPath = _normalizeWorkspacePath(rawPath);
       if (!_isPathWithinWorkspace(rawPath)) {
-        await _updateImageGridMessage(message, i, status: 'error', error: 'Image path is outside the workspace.');
+        await _updateImageGridMessage(
+          message,
+          i,
+          status: 'error',
+          error: 'Image path is outside the workspace.',
+        );
         continue;
       }
 
@@ -351,7 +361,12 @@ class SessionController extends SessionControllerBase {
         final bytes = target.local
             ? await _readLocalImageBytes(rawPath)
             : await _readRemoteImageBytes(rawPath);
-        await _updateImageGridMessage(message, i, status: 'loaded', bytes: bytes);
+        await _updateImageGridMessage(
+          message,
+          i,
+          status: 'loaded',
+          bytes: bytes,
+        );
       } catch (e) {
         await _updateImageGridMessage(message, i, status: 'error', error: '$e');
       }
@@ -380,7 +395,9 @@ class SessionController extends SessionControllerBase {
     }
     final len = await file.length();
     if (len > _maxImageBytes) {
-      throw StateError('Image too large (${(len / (1024 * 1024)).toStringAsFixed(1)} MB).');
+      throw StateError(
+        'Image too large (${(len / (1024 * 1024)).toStringAsFixed(1)} MB).',
+      );
     }
     final bytes = await file.readAsBytes();
     if (bytes.isEmpty) throw StateError('Image was empty.');
@@ -393,20 +410,22 @@ class SessionController extends SessionControllerBase {
 
   Future<Uint8List> _readRemoteImageBytes(String absPath) async {
     final profile = target.profile!;
-    final pem = await _storage.read(key: SecureStorageService.sshPrivateKeyPemKey);
+    final pem = await _storage.read(
+      key: SecureStorageService.sshPrivateKeyPemKey,
+    );
 
     final root = projectPath;
-      final cmdBody = [
-        'set -e',
-        'p=${_shQuote(absPath)}',
-        'root=${_shQuote(root)}',
-        'case "\$p" in',
-        '  "\$root"|"\$root"/*) ;;',
-        '  *) echo "outside workspace" >&2; exit 3 ;;',
-        'esac',
-        '[ -f "\$p" ] || { echo "missing: \$p" >&2; exit 4; }',
-        'sz=\$(stat -f %z "\$p" 2>/dev/null || stat -c %s "\$p" 2>/dev/null || echo 0)',
-        'if [ "\$sz" -gt ${_maxImageBytes.toString()} ]; then',
+    final cmdBody = [
+      'set -e',
+      'p=${_shQuote(absPath)}',
+      'root=${_shQuote(root)}',
+      'case "\$p" in',
+      '  "\$root"|"\$root"/*) ;;',
+      '  *) echo "outside workspace" >&2; exit 3 ;;',
+      'esac',
+      '[ -f "\$p" ] || { echo "missing: \$p" >&2; exit 4; }',
+      'sz=\$(stat -f %z "\$p" 2>/dev/null || stat -c %s "\$p" 2>/dev/null || echo 0)',
+      'if [ "\$sz" -gt ${_maxImageBytes.toString()} ]; then',
       '  echo "too large: \$sz bytes" >&2; exit 5;',
       'fi',
       'base64 < "\$p"',
@@ -442,7 +461,9 @@ class SessionController extends SessionControllerBase {
 
     final exit = res.exitCode ?? 1;
     if (exit != 0) {
-      final err = res.stderr.trim().isEmpty ? 'Failed to read image.' : res.stderr.trim();
+      final err = res.stderr.trim().isEmpty
+          ? 'Failed to read image.'
+          : res.stderr.trim();
       throw StateError(err);
     }
 
@@ -533,7 +554,10 @@ class SessionController extends SessionControllerBase {
       } else {
         next.remove('error');
       }
-      await chatController.updateMessage(message, message.copyWith(metadata: next));
+      await chatController.updateMessage(
+        message,
+        message.copyWith(metadata: next),
+      );
     } catch (_) {}
   }
 
@@ -566,8 +590,57 @@ class SessionController extends SessionControllerBase {
       items[index] = item;
       next['images'] = items;
 
-      await chatController.updateMessage(message, message.copyWith(metadata: next));
+      await chatController.updateMessage(
+        message,
+        message.copyWith(metadata: next),
+      );
     } catch (_) {}
+  }
+
+  Future<void> _initAsync() async {
+    try {
+      await _loadThreadId();
+      await _loadRemoteJobId();
+      await _loadLogLineCursor();
+      if (!target.local) {
+        await _maybeReattachRemote();
+      } else {
+        await _maybeReattachLocal();
+      }
+    } catch (_) {
+      // Best-effort.
+    }
+  }
+
+  Future<void> _loadLogLineCursor() async {
+    try {
+      _logLineCursor = await _sessionStore.loadLogLineCursor(
+        targetKey: target.targetKey,
+        projectPath: projectPath,
+        tabId: tabId,
+      );
+    } catch (_) {
+      _logLineCursor = 0;
+    }
+  }
+
+  void _bumpLogLineCursor() {
+    _logLineCursor++;
+    if (_cursorSaveTimer != null) return;
+    _cursorSaveTimer = Timer(const Duration(milliseconds: 400), () {
+      _cursorSaveTimer = null;
+      final cursor = _logLineCursor;
+      _cursorSaveQueue = _cursorSaveQueue.then((_) async {
+        try {
+          await _sessionStore.saveLogLineCursor(
+            targetKey: target.targetKey,
+            projectPath: projectPath,
+            tabId: tabId,
+            cursor: cursor,
+          );
+        } catch (_) {}
+      });
+    });
   }
 
   Future<void> _loadThreadId() async {
@@ -610,10 +683,7 @@ class SessionController extends SessionControllerBase {
 
       if (remoteJobId.value == null || remoteJobId.value!.isEmpty) return;
 
-      await _rehydrateFromLocalLog(
-        maxLines: 200,
-        logRelPath: _logRelPath,
-      );
+      await _rehydrateFromLocalLog(maxLines: 200, logRelPath: _logRelPath);
       await reattachIfNeeded(backfillLines: 0);
     } catch (_) {
       // Best-effort.
@@ -677,8 +747,9 @@ class SessionController extends SessionControllerBase {
     }
 
     final profile = target.profile!;
-    final pem =
-        await _storage.read(key: SecureStorageService.sshPrivateKeyPemKey);
+    final pem = await _storage.read(
+      key: SecureStorageService.sshPrivateKeyPemKey,
+    );
 
     await _ssh.writeRemoteFile(
       host: profile.host,
@@ -694,21 +765,25 @@ class SessionController extends SessionControllerBase {
   Future<void> _ensureCodexRemoteDirsLocal() async {
     final dir = Directory(_joinPosix(projectPath, _codexRemoteDir));
     await dir.create(recursive: true);
-    await Directory(_joinPosix(projectPath, _sessionsDirRelPath))
-        .create(recursive: true);
-    await Directory(_joinPosix(projectPath, _tmpDirRelPath))
-        .create(recursive: true);
+    await Directory(
+      _joinPosix(projectPath, _sessionsDirRelPath),
+    ).create(recursive: true);
+    await Directory(
+      _joinPosix(projectPath, _tmpDirRelPath),
+    ).create(recursive: true);
     await File(_joinPosix(projectPath, _logRelPath)).create(recursive: true);
-    await File(_joinPosix(projectPath, _stderrLogRelPath))
-        .create(recursive: true);
+    await File(
+      _joinPosix(projectPath, _stderrLogRelPath),
+    ).create(recursive: true);
     await File(_joinPosix(projectPath, _jobRelPath)).create(recursive: true);
     await File(_joinPosix(projectPath, _pidRelPath)).create(recursive: true);
   }
 
   Future<void> _ensureCodexRemoteDirsRemote() async {
     final profile = target.profile!;
-    final pem =
-        await _storage.read(key: SecureStorageService.sshPrivateKeyPemKey);
+    final pem = await _storage.read(
+      key: SecureStorageService.sshPrivateKeyPemKey,
+    );
 
     Future<void> run(String cmd) async {
       try {
@@ -794,7 +869,10 @@ class SessionController extends SessionControllerBase {
     }
   }
 
-  Future<void> _startLocalLogTailIfNeeded({int startAtLines = 0}) async {
+  Future<void> _startLocalLogTailIfNeeded({
+    int? startAtLine,
+    int backfillLines = 200,
+  }) async {
     if (_localTailProc != null) return;
     final logPath = _joinPosix(projectPath, _logRelPath);
     final file = File(logPath);
@@ -803,9 +881,37 @@ class SessionController extends SessionControllerBase {
       await file.create(recursive: true);
     }
 
+    int start = startAtLine ?? 0;
+    if (start <= 0) {
+      int currentLines = 0;
+      try {
+        currentLines = await _localLineCount(path: logPath);
+      } catch (_) {}
+
+      if (_logLineCursor > 0 &&
+          currentLines > 0 &&
+          _logLineCursor > currentLines) {
+        start = (currentLines - backfillLines + 1).clamp(
+          1,
+          currentLines == 0 ? 1 : currentLines,
+        );
+        _logLineCursor = start - 1;
+      } else if (_logLineCursor > 0) {
+        start = _logLineCursor + 1;
+      } else {
+        start = (currentLines - backfillLines + 1).clamp(
+          1,
+          currentLines == 0 ? 1 : currentLines,
+        );
+        _logLineCursor = start - 1;
+      }
+    } else {
+      _logLineCursor = start - 1;
+    }
+
     final proc = _localShell.startCommand(
       executable: 'tail',
-      arguments: ['-n', '$startAtLines', '-F', logPath],
+      arguments: ['-n', '+$start', '-F', logPath],
       workingDirectory: projectPath,
     );
     final token = Object();
@@ -814,6 +920,7 @@ class SessionController extends SessionControllerBase {
 
     _localTailStdoutSub = proc.stdoutLines.listen((line) {
       if (line.trim().isEmpty) return;
+      _bumpLogLineCursor();
       if (!_shouldProcessLogLine(line)) return;
       _tailQueue = _tailQueue.then((_) async {
         try {
@@ -864,20 +971,32 @@ class SessionController extends SessionControllerBase {
 
   Future<void> _onAppResumed() async {
     final active = _activeSession.active;
-    final isActiveView = active != null &&
+    final isActiveView =
+        active != null &&
         active.targetKey == target.targetKey &&
         active.projectPath == projectPath &&
         active.tabId == tabId;
     if (!isActiveView) return;
 
-    // If we believe the job is running but tail died (common after sleep),
-    // re-check liveness and reattach tail with a small backfill.
-    if (!isRunning.value) return;
     if (target.local) {
+      final job = _remoteJobId ?? remoteJobId.value;
+      if (job == null || job.isEmpty) return;
       if (_localTailProc != null) return;
       await _refreshLocalRunningStateAndTail(backfillLines: 200);
       return;
     }
+    if ((_remoteJobId ?? remoteJobId.value) == null ||
+        (_remoteJobId ?? remoteJobId.value)!.isEmpty) {
+      try {
+        final latched = await _tryLatchRemoteJobIdFromRemoteJobFile();
+        if (latched != null && latched.isNotEmpty) {
+          _remoteJobId = latched;
+          remoteJobId.value = latched;
+        }
+      } catch (_) {}
+    }
+    final job = _remoteJobId ?? remoteJobId.value;
+    if (job == null || job.isEmpty) return;
     if (_tailProc != null) return;
     await _refreshRemoteRunningStateAndTail(backfillLines: 200);
   }
@@ -908,7 +1027,8 @@ class SessionController extends SessionControllerBase {
 
         await _insertEvent(
           type: 'command_execution',
-          text: 'Running locally: codex ${CodexCommandBuilder.shellString(cmd.args)}',
+          text:
+              'Running locally: codex ${CodexCommandBuilder.shellString(cmd.args)}',
         );
 
         await _runLocal(cmd);
@@ -975,8 +1095,9 @@ class SessionController extends SessionControllerBase {
     required String logAbsPath,
   }) async {
     final profile = target.profile!;
-    final pem =
-        await _storage.read(key: SecureStorageService.sshPrivateKeyPemKey);
+    final pem = await _storage.read(
+      key: SecureStorageService.sshPrivateKeyPemKey,
+    );
 
     final line = _clientUserMessageJsonlLine(prompt);
     final cmd = 'printf %s\\\\n ${_shQuote(line)} >> ${_shQuote(logAbsPath)}';
@@ -990,9 +1111,7 @@ class SessionController extends SessionControllerBase {
     );
   }
 
-  Future<void> _appendClientJsonlToLog({
-    required String jsonlLine,
-  }) async {
+  Future<void> _appendClientJsonlToLog({required String jsonlLine}) async {
     if (target.local) {
       await _ensureCodexRemoteDirsLocal();
       final file = File(_joinPosix(projectPath, _logRelPath));
@@ -1001,10 +1120,12 @@ class SessionController extends SessionControllerBase {
     }
 
     final profile = target.profile!;
-    final pem =
-        await _storage.read(key: SecureStorageService.sshPrivateKeyPemKey);
+    final pem = await _storage.read(
+      key: SecureStorageService.sshPrivateKeyPemKey,
+    );
     final logAbsPath = _remoteAbsPath(_logRelPath);
-    final cmd = 'printf %s\\\\n ${_shQuote(jsonlLine)} >> ${_shQuote(logAbsPath)}';
+    final cmd =
+        'printf %s\\\\n ${_shQuote(jsonlLine)} >> ${_shQuote(logAbsPath)}';
     try {
       await _ssh.runCommandWithResult(
         host: profile.host,
@@ -1043,13 +1164,15 @@ class SessionController extends SessionControllerBase {
     _cancelCurrent = proc.cancel;
 
     await _consumeCodexStreams(
-      stdoutJsonl: proc.stdoutLines.map((l) {
-        try {
-          final decoded = jsonDecode(l);
-          if (decoded is Map) return decoded.cast<String, Object?>();
-        } catch (_) {}
-        return <String, Object?>{};
-      }).where((m) => m.isNotEmpty),
+      stdoutJsonl: proc.stdoutLines
+          .map((l) {
+            try {
+              final decoded = jsonDecode(l);
+              if (decoded is Map) return decoded.cast<String, Object?>();
+            } catch (_) {}
+            return <String, Object?>{};
+          })
+          .where((m) => m.isNotEmpty),
       stderrLines: proc.stderrLines,
       onExit: proc.done,
     );
@@ -1080,8 +1203,9 @@ class SessionController extends SessionControllerBase {
 
     final profile = target.profile!;
 
-    final pem =
-        await _storage.read(key: SecureStorageService.sshPrivateKeyPemKey);
+    final pem = await _storage.read(
+      key: SecureStorageService.sshPrivateKeyPemKey,
+    );
 
     try {
       await _stopRemoteJobBestEffort();
@@ -1108,7 +1232,7 @@ class SessionController extends SessionControllerBase {
             'Starting remote job: codex ${CodexCommandBuilder.shellString(cmd.args)}',
       );
 
-      await _startRemoteLogTailIfNeeded();
+      await _startRemoteLogTailIfNeeded(backfillLines: 0);
 
       final tmuxName =
           'cr_${tabId.replaceAll('-', '').substring(0, 8)}_${DateTime.now().millisecondsSinceEpoch}';
@@ -1297,14 +1421,75 @@ class SessionController extends SessionControllerBase {
     }
   }
 
-  Future<void> _startRemoteLogTailIfNeeded({int startAtLines = 0}) async {
+  static int _parseWcLineCount(String stdout) {
+    final trimmed = stdout.trim();
+    if (trimmed.isEmpty) return 0;
+    final first = trimmed.split(RegExp(r'\\s+')).first;
+    return int.tryParse(first) ?? 0;
+  }
+
+  Future<int> _remoteLineCount({required String absPath}) async {
+    if (target.local) return 0;
+    final profile = target.profile!;
+    final pem = await _storage.read(
+      key: SecureStorageService.sshPrivateKeyPemKey,
+    );
+
+    Future<SshCommandResult> run(String cmd) async {
+      try {
+        return await _ssh.runCommandWithResult(
+          host: profile.host,
+          port: profile.port,
+          username: profile.username,
+          privateKeyPem: pem,
+          password: _sshPassword,
+          command: cmd,
+        );
+      } catch (_) {
+        if (_sshPassword == null) {
+          final pw = await _promptForPassword();
+          if (pw == null || pw.isEmpty) rethrow;
+          _sshPassword = pw;
+          return _ssh.runCommandWithResult(
+            host: profile.host,
+            port: profile.port,
+            username: profile.username,
+            privateKeyPem: pem,
+            password: _sshPassword,
+            command: cmd,
+          );
+        }
+        rethrow;
+      }
+    }
+
+    final script =
+        'if [ -f ${_shQuote(absPath)} ]; then wc -l ${_shQuote(absPath)} 2>/dev/null | sed \'s/^[[:space:]]*\\\\([0-9][0-9]*\\\\).*/\\\\1/\'; else echo 0; fi';
+    final res = await run('sh -c ${_shQuote(script)}');
+    return _parseWcLineCount(res.stdout);
+  }
+
+  Future<int> _localLineCount({required String path}) async {
+    try {
+      final res = await Process.run('/usr/bin/wc', ['-l', path]);
+      return _parseWcLineCount((res.stdout as Object?)?.toString() ?? '');
+    } catch (_) {
+      return 0;
+    }
+  }
+
+  Future<void> _startRemoteLogTailIfNeeded({
+    int? startAtLine,
+    int backfillLines = 200,
+  }) async {
     if (_tailProc != null) return;
 
     final profile = target.profile!;
-    final pem =
-        await _storage.read(key: SecureStorageService.sshPrivateKeyPemKey);
+    final pem = await _storage.read(
+      key: SecureStorageService.sshPrivateKeyPemKey,
+    );
 
-    Future<SshCommandProcess> start(String cmd) async {
+    Future<SshCommandProcess> startProc(String cmd) async {
       try {
         return await _ssh.startCommand(
           host: profile.host,
@@ -1333,15 +1518,45 @@ class SessionController extends SessionControllerBase {
     }
 
     final logAbs = _remoteAbsPath(_logRelPath);
+
+    int startLine = startAtLine ?? 0;
+    if (startLine <= 0) {
+      int currentLines = 0;
+      try {
+        currentLines = await _remoteLineCount(absPath: logAbs);
+      } catch (_) {}
+
+      if (_logLineCursor > 0 &&
+          currentLines > 0 &&
+          _logLineCursor > currentLines) {
+        startLine = (currentLines - backfillLines + 1).clamp(
+          1,
+          currentLines == 0 ? 1 : currentLines,
+        );
+        _logLineCursor = startLine - 1;
+      } else if (_logLineCursor > 0) {
+        startLine = _logLineCursor + 1;
+      } else {
+        startLine = (currentLines - backfillLines + 1).clamp(
+          1,
+          currentLines == 0 ? 1 : currentLines,
+        );
+        _logLineCursor = startLine - 1;
+      }
+    } else {
+      _logLineCursor = startLine - 1;
+    }
+
     final cmd =
-        'sh -c ${_shQuote('tail -n $startAtLines -F ${_shQuote(logAbs)}')}';
-    final proc = await start(cmd);
+        'sh -c ${_shQuote('tail -n +$startLine -F ${_shQuote(logAbs)}')}';
+    final proc = await startProc(cmd);
     final token = Object();
     _tailToken = token;
     _tailProc = proc;
 
     _tailStdoutSub = proc.stdoutLines.listen((line) {
       if (line.trim().isEmpty) return;
+      _bumpLogLineCursor();
       if (!_shouldProcessLogLine(line)) return;
       _tailQueue = _tailQueue.then((_) async {
         try {
@@ -1370,13 +1585,30 @@ class SessionController extends SessionControllerBase {
     });
   }
 
-  Future<void> _refreshRemoteRunningStateAndTail({required int backfillLines}) async {
-    final stored = _remoteJobId ??
+  Future<void> _refreshRemoteRunningStateAndTail({
+    required int backfillLines,
+  }) async {
+    var stored =
+        _remoteJobId ??
         await _sessionStore.loadRemoteJobId(
           targetKey: target.targetKey,
           projectPath: projectPath,
           tabId: tabId,
         );
+    if (stored == null || stored.isEmpty) {
+      try {
+        final latched = await _tryLatchRemoteJobIdFromRemoteJobFile();
+        if (latched != null && latched.isNotEmpty) {
+          stored = latched;
+          await _sessionStore.saveRemoteJobId(
+            targetKey: target.targetKey,
+            projectPath: projectPath,
+            tabId: tabId,
+            remoteJobId: latched,
+          );
+        }
+      } catch (_) {}
+    }
     _remoteJobId = stored;
     remoteJobId.value = stored;
     if (stored == null || stored.isEmpty) {
@@ -1388,7 +1620,9 @@ class SessionController extends SessionControllerBase {
     }
 
     final profile = target.profile!;
-    final pem = await _storage.read(key: SecureStorageService.sshPrivateKeyPemKey);
+    final pem = await _storage.read(
+      key: SecureStorageService.sshPrivateKeyPemKey,
+    );
 
     String checkCmd;
     if (stored.startsWith('tmux:')) {
@@ -1429,7 +1663,7 @@ class SessionController extends SessionControllerBase {
           isRunning.value = false;
         });
       };
-      await _startRemoteLogTailIfNeeded(startAtLines: backfillLines);
+      await _startRemoteLogTailIfNeeded(backfillLines: backfillLines);
       return;
     }
 
@@ -1453,15 +1687,20 @@ class SessionController extends SessionControllerBase {
     _cancelTailOnly();
   }
 
-  Future<void> _refreshLocalRunningStateAndTail({required int backfillLines}) async {
+  Future<void> _refreshLocalRunningStateAndTail({
+    required int backfillLines,
+  }) async {
     if (!target.local) return;
-    final stored = remoteJobId.value ??
+    final stored =
+        remoteJobId.value ??
         (await _sessionStore.loadRemoteJobId(
           targetKey: target.targetKey,
           projectPath: projectPath,
           tabId: tabId,
         ));
-    final job = (stored == null || stored.isEmpty) ? await _readLocalJobId() : stored;
+    final job = (stored == null || stored.isEmpty)
+        ? await _readLocalJobId()
+        : stored;
 
     if (job == null || job.isEmpty) {
       isRunning.value = false;
@@ -1500,7 +1739,7 @@ class SessionController extends SessionControllerBase {
           _remoteJobId = null;
         });
       };
-      await _startLocalLogTailIfNeeded(startAtLines: backfillLines);
+      await _startLocalLogTailIfNeeded(backfillLines: backfillLines);
       return;
     }
 
@@ -1537,7 +1776,10 @@ class SessionController extends SessionControllerBase {
 
     if (job.startsWith('pid:')) {
       final pid = job.substring('pid:'.length);
-      final res = await Process.run('/bin/sh', ['-c', 'kill -0 $pid >/dev/null 2>&1']);
+      final res = await Process.run('/bin/sh', [
+        '-c',
+        'kill -0 $pid >/dev/null 2>&1',
+      ]);
       return res.exitCode == 0;
     }
 
@@ -1575,7 +1817,8 @@ class SessionController extends SessionControllerBase {
   }
 
   Future<void> _stopRemoteJob() async {
-    final job = _remoteJobId ??
+    final job =
+        _remoteJobId ??
         await _sessionStore.loadRemoteJobId(
           targetKey: target.targetKey,
           projectPath: projectPath,
@@ -1586,8 +1829,9 @@ class SessionController extends SessionControllerBase {
     }
 
     final profile = target.profile!;
-    final pem =
-        await _storage.read(key: SecureStorageService.sshPrivateKeyPemKey);
+    final pem = await _storage.read(
+      key: SecureStorageService.sshPrivateKeyPemKey,
+    );
 
     String cmd;
     if (job.startsWith('tmux:')) {
@@ -1637,11 +1881,25 @@ class SessionController extends SessionControllerBase {
 
   Future<void> _maybeReattachRemote() async {
     try {
-      final stored = await _sessionStore.loadRemoteJobId(
+      var stored = await _sessionStore.loadRemoteJobId(
         targetKey: target.targetKey,
         projectPath: projectPath,
         tabId: tabId,
       );
+      if (stored == null || stored.isEmpty) {
+        try {
+          final latched = await _tryLatchRemoteJobIdFromRemoteJobFile();
+          if (latched != null && latched.isNotEmpty) {
+            stored = latched;
+            await _sessionStore.saveRemoteJobId(
+              targetKey: target.targetKey,
+              projectPath: projectPath,
+              tabId: tabId,
+              remoteJobId: latched,
+            );
+          }
+        } catch (_) {}
+      }
       _remoteJobId = stored;
       remoteJobId.value = stored;
 
@@ -1661,8 +1919,9 @@ class SessionController extends SessionControllerBase {
       };
 
       final profile = target.profile!;
-      final pem =
-          await _storage.read(key: SecureStorageService.sshPrivateKeyPemKey);
+      final pem = await _storage.read(
+        key: SecureStorageService.sshPrivateKeyPemKey,
+      );
 
       String checkCmd;
       if (stored.startsWith('tmux:')) {
@@ -1695,7 +1954,7 @@ class SessionController extends SessionControllerBase {
       );
 
       if ((check.exitCode ?? 1) == 0 || (check.exitCode ?? 1) == 127) {
-        await _startRemoteLogTailIfNeeded();
+        await _startRemoteLogTailIfNeeded(backfillLines: 200);
       } else {
         await _sessionStore.clearRemoteJobId(
           targetKey: target.targetKey,
@@ -1724,11 +1983,56 @@ class SessionController extends SessionControllerBase {
     }
   }
 
+  Future<String?> _tryLatchRemoteJobIdFromRemoteJobFile() async {
+    if (target.local) return null;
+    final profile = target.profile;
+    if (profile == null) return null;
+
+    final pem = await _storage.read(
+      key: SecureStorageService.sshPrivateKeyPemKey,
+    );
+    if (pem == null || pem.trim().isEmpty) return null;
+
+    final jobAbs = _remoteAbsPath(_jobRelPath);
+    final cmd =
+        'sh -c ${_shQuote('if [ -f ${_shQuote(jobAbs)} ]; then head -n 1 ${_shQuote(jobAbs)}; fi')}';
+
+    Future<SshCommandResult> runOnce({String? password}) {
+      return _ssh.runCommandWithResult(
+        host: profile.host,
+        port: profile.port,
+        username: profile.username,
+        privateKeyPem: pem,
+        password: password,
+        command: cmd,
+      );
+    }
+
+    SshCommandResult res;
+    try {
+      res = await runOnce(password: _sshPassword);
+    } catch (_) {
+      if (_sshPassword == null) {
+        final pw = await _promptForPassword();
+        if (pw == null || pw.isEmpty) return null;
+        _sshPassword = pw;
+        res = await runOnce(password: _sshPassword);
+      } else {
+        return null;
+      }
+    }
+
+    final job = res.stdout.trim();
+    if (job.isEmpty) return null;
+    return job;
+  }
+
   Future<void> _rehydrateFromRemoteLog({required int maxLines}) async {
     if (target.local) return;
     final profile = target.profile!;
-    final pem =
-        await _storage.read(key: SecureStorageService.sshPrivateKeyPemKey);
+    final pem = await _storage.read(
+      key: SecureStorageService.sshPrivateKeyPemKey,
+    );
 
     try {
       Future<SshCommandResult> run(String cmd) async {
@@ -1795,10 +2099,7 @@ class SessionController extends SessionControllerBase {
       }
 
       await chatController.setMessages(backfill, animated: false);
-      await _maybeCatchUpAutoCommitFromHydratedLog(
-        lines: lines,
-        startIndex: 0,
-      );
+      await _maybeCatchUpAutoCommitFromHydratedLog(lines: lines, startIndex: 0);
     } catch (_) {
       // Best-effort.
     }
@@ -1809,8 +2110,9 @@ class SessionController extends SessionControllerBase {
   }) async {
     if (target.local) return false;
     final profile = target.profile!;
-    final pem =
-        await _storage.read(key: SecureStorageService.sshPrivateKeyPemKey);
+    final pem = await _storage.read(
+      key: SecureStorageService.sshPrivateKeyPemKey,
+    );
     final logAbs = _remoteAbsPath(_logRelPath);
     final pattern = _shQuote(
       '"type":"$_clientGitCommitType","status":"(completed|skipped|failed)".*"source_item_id":"$sourceItemId"',
@@ -1914,11 +2216,12 @@ class SessionController extends SessionControllerBase {
 
     if (committedSourceIds.contains(sourceItemId)) return;
     if (!target.local) {
-      final alreadyLogged = await _remoteLogHasGitCommitMarker(sourceItemId: sourceItemId);
+      final alreadyLogged = await _remoteLogHasGitCommitMarker(
+        sourceItemId: sourceItemId,
+      );
       if (alreadyLogged) return;
     } else {
-      final marker =
-          '"type":"$_clientGitCommitType"';
+      final marker = '"type":"$_clientGitCommitType"';
       final source = '"source_item_id":"$sourceItemId"';
       final hasFinalMarker = lines.any(
         (l) =>
@@ -1990,8 +2293,9 @@ class SessionController extends SessionControllerBase {
     if (target.local) return;
 
     final profile = target.profile!;
-    final pem =
-        await _storage.read(key: SecureStorageService.sshPrivateKeyPemKey);
+    final pem = await _storage.read(
+      key: SecureStorageService.sshPrivateKeyPemKey,
+    );
 
     Future<SshCommandResult> run(String cmd) async {
       try {
@@ -2057,7 +2361,10 @@ class SessionController extends SessionControllerBase {
     }
 
     await chatController.setMessages(backfill, animated: false);
-    await _maybeCatchUpAutoCommitFromHydratedLog(lines: lines, startIndex: start);
+    await _maybeCatchUpAutoCommitFromHydratedLog(
+      lines: lines,
+      startIndex: start,
+    );
   }
 
   Future<void> _rehydrateFromLocalLog({
@@ -2073,8 +2380,9 @@ class SessionController extends SessionControllerBase {
     final lines = const LineSplitter().convert(contents);
     if (lines.isEmpty) return;
 
-    final tail =
-        lines.length <= maxLines ? lines : lines.sublist(lines.length - maxLines);
+    final tail = lines.length <= maxLines
+        ? lines
+        : lines.sublist(lines.length - maxLines);
     for (final line in tail) {
       if (line.trim().isNotEmpty) _rememberRecentLogLine(line);
     }
@@ -2103,7 +2411,10 @@ class SessionController extends SessionControllerBase {
     }
 
     await chatController.setMessages(backfill, animated: false);
-    await _maybeCatchUpAutoCommitFromHydratedLog(lines: tail, startIndex: start);
+    await _maybeCatchUpAutoCommitFromHydratedLog(
+      lines: tail,
+      startIndex: start,
+    );
   }
 
   static int _findFocusStartIndex(List<String> lines, String? focusThreadId) {
@@ -2133,7 +2444,9 @@ class SessionController extends SessionControllerBase {
     return 0;
   }
 
-  Future<String?> _findLocalLogRelPathForThread({required String threadId}) async {
+  Future<String?> _findLocalLogRelPathForThread({
+    required String threadId,
+  }) async {
     final dir = Directory(_joinPosix(projectPath, _sessionsDirRelPath));
     if (!await dir.exists()) return null;
 
@@ -2155,11 +2468,14 @@ class SessionController extends SessionControllerBase {
     return null;
   }
 
-  Future<String?> _findRemoteLogRelPathForThread({required String threadId}) async {
+  Future<String?> _findRemoteLogRelPathForThread({
+    required String threadId,
+  }) async {
     if (target.local) return null;
     final profile = target.profile!;
-    final pem =
-        await _storage.read(key: SecureStorageService.sshPrivateKeyPemKey);
+    final pem = await _storage.read(
+      key: SecureStorageService.sshPrivateKeyPemKey,
+    );
     if (pem == null || pem.trim().isEmpty) return null;
 
     final pattern = _shQuote('"thread_id":"$threadId"');
@@ -2253,7 +2569,9 @@ class SessionController extends SessionControllerBase {
       return;
     }
 
-    if (type == 'turn.started' || type == 'turn.completed' || type == 'turn.failed') {
+    if (type == 'turn.started' ||
+        type == 'turn.completed' ||
+        type == 'turn.failed') {
       if (type == 'turn.started' && !isRunning.value) {
         isRunning.value = true;
         thinkingPreview.value = null;
@@ -2281,7 +2599,8 @@ class SessionController extends SessionControllerBase {
         // Best-effort: notify even if user is on a different screen/tab.
         try {
           final active = _activeSession.active;
-          final isActiveView = active != null &&
+          final isActiveView =
+              active != null &&
               active.targetKey == target.targetKey &&
               active.projectPath == projectPath &&
               active.tabId == tabId;
@@ -2298,7 +2617,8 @@ class SessionController extends SessionControllerBase {
         } catch (_) {}
       }
 
-      if (!target.local && (type == 'turn.completed' || type == 'turn.failed')) {
+      if (!target.local &&
+          (type == 'turn.completed' || type == 'turn.failed')) {
         await _sessionStore.clearRemoteJobId(
           targetKey: target.targetKey,
           projectPath: projectPath,
@@ -2328,8 +2648,9 @@ class SessionController extends SessionControllerBase {
           final raw = (item['text'] as Object?)?.toString() ?? '';
           final oneLine = raw.replaceAll(RegExp(r'\s+'), ' ').trim();
           if (oneLine.isNotEmpty && isRunning.value) {
-            thinkingPreview.value =
-                oneLine.length > 160 ? '${oneLine.substring(0, 160)}…' : oneLine;
+            thinkingPreview.value = oneLine.length > 160
+                ? '${oneLine.substring(0, 160)}…'
+                : oneLine;
           }
           return;
         }
@@ -2390,8 +2711,9 @@ class SessionController extends SessionControllerBase {
     try {
       final decoded = jsonDecode(text);
       if (decoded is Map) {
-        final resp =
-            CodexStructuredResponse.fromJson(decoded.cast<String, Object?>());
+        final resp = CodexStructuredResponse.fromJson(
+          decoded.cast<String, Object?>(),
+        );
 
         final out = <Message>[
           Message.text(
@@ -2411,13 +2733,17 @@ class SessionController extends SessionControllerBase {
               metadata: {
                 'kind': 'codex_image_grid',
                 'images': resp.images
-                    .map((img) => {
-                          'path': img.path.trim(),
-                          if (img.caption.trim().isNotEmpty)
-                            'caption': img.caption.trim(),
-                          'status': replay ? 'tap_to_load' : 'loading',
-                        })
-                    .where((m) => (m['path']?.toString().trim() ?? '').isNotEmpty)
+                    .map(
+                      (img) => {
+                        'path': img.path.trim(),
+                        if (img.caption.trim().isNotEmpty)
+                          'caption': img.caption.trim(),
+                        'status': replay ? 'tap_to_load' : 'loading',
+                      },
+                    )
+                    .where(
+                      (m) => (m['path']?.toString().trim() ?? '').isNotEmpty,
+                    )
                     .toList(growable: false),
               },
             ),
@@ -2428,7 +2754,9 @@ class SessionController extends SessionControllerBase {
         out.add(
           _eventMessage(
             type: 'commit_message',
-            text: commitMessage.isEmpty ? '(empty commit_message)' : commitMessage,
+            text: commitMessage.isEmpty
+                ? '(empty commit_message)'
+                : commitMessage,
           ),
         );
 
@@ -2437,17 +2765,25 @@ class SessionController extends SessionControllerBase {
         }
 
         if (resp.actions.isNotEmpty) {
-          final actionsMessage = Message.custom(
-                id: _uuid.v4(),
-                authorId: _codex,
-                createdAt: DateTime.now().toUtc(),
-                metadata: {
-                  'kind': 'codex_actions',
-                  'actions': resp.actions
-                      .map((a) => {'id': a.id, 'label': a.label, 'value': a.value})
-                      .toList(),
-                },
-              ) as CustomMessage;
+          final actionsMessage =
+              Message.custom(
+                    id: _uuid.v4(),
+                    authorId: _codex,
+                    createdAt: DateTime.now().toUtc(),
+                    metadata: {
+                      'kind': 'codex_actions',
+                      'actions': resp.actions
+                          .map(
+                            (a) => {
+                              'id': a.id,
+                              'label': a.label,
+                              'value': a.value,
+                            },
+                          )
+                          .toList(),
+                    },
+                  )
+                  as CustomMessage;
           _pendingActionsMessage = actionsMessage;
           out.add(actionsMessage);
         }
@@ -2529,7 +2865,9 @@ class SessionController extends SessionControllerBase {
       return const [];
     }
 
-    if (type == 'turn.started' || type == 'turn.completed' || type == 'turn.failed') {
+    if (type == 'turn.started' ||
+        type == 'turn.completed' ||
+        type == 'turn.failed') {
       if (type == 'turn.failed') {
         final err = event['error']?.toString();
         final trimmed = err?.trim();
@@ -2552,7 +2890,11 @@ class SessionController extends SessionControllerBase {
         if (itemType == 'agent_message') {
           final text = item['text'] as String? ?? '';
           final itemId = item['id']?.toString();
-          return _materializeAgentMessage(text, replay: replay, sourceItemId: itemId);
+          return _materializeAgentMessage(
+            text,
+            replay: replay,
+            sourceItemId: itemId,
+          );
         }
         return [
           _itemMessage(
@@ -2657,7 +2999,10 @@ class SessionController extends SessionControllerBase {
 
     final changes = (status.stdout as Object?).toString().trim();
     if (changes.isEmpty) {
-      await _insertEvent(type: 'git_commit_skipped', text: 'No changes to commit.');
+      await _insertEvent(
+        type: 'git_commit_skipped',
+        text: 'No changes to commit.',
+      );
       await _appendClientJsonlToLog(
         jsonlLine: _clientGitCommitJsonlLine(
           status: 'skipped',
@@ -2685,8 +3030,10 @@ class SessionController extends SessionControllerBase {
 
     final out = (commit.stdout as Object?).toString().trim();
     final err = (commit.stderr as Object?).toString().trim();
-    if (out.isNotEmpty) await _insertEvent(type: 'git_commit_stdout', text: out);
-    if (err.isNotEmpty) await _insertEvent(type: 'git_commit_stderr', text: err);
+    if (out.isNotEmpty)
+      await _insertEvent(type: 'git_commit_stdout', text: out);
+    if (err.isNotEmpty)
+      await _insertEvent(type: 'git_commit_stderr', text: err);
 
     await _appendClientJsonlToLog(
       jsonlLine: _clientGitCommitJsonlLine(
@@ -2704,7 +3051,9 @@ class SessionController extends SessionControllerBase {
     String? sourceItemId,
   }) async {
     final profile = target.profile!;
-    final pem = await _storage.read(key: SecureStorageService.sshPrivateKeyPemKey);
+    final pem = await _storage.read(
+      key: SecureStorageService.sshPrivateKeyPemKey,
+    );
 
     String? password = _sshPassword;
 
@@ -2768,7 +3117,10 @@ class SessionController extends SessionControllerBase {
       return;
     }
     if (statusOut.isEmpty) {
-      await _insertEvent(type: 'git_commit_skipped', text: 'No changes to commit.');
+      await _insertEvent(
+        type: 'git_commit_skipped',
+        text: 'No changes to commit.',
+      );
       await _appendClientJsonlToLog(
         jsonlLine: _clientGitCommitJsonlLine(
           status: 'skipped',
@@ -2781,8 +3133,9 @@ class SessionController extends SessionControllerBase {
     }
 
     final msg = _shQuote(commitMessage);
-    final commitRes =
-        await runWithResult('cd $cd && git add -A && git commit -m $msg');
+    final commitRes = await runWithResult(
+      'cd $cd && git add -A && git commit -m $msg',
+    );
     final out = commitRes.stdout.trim();
     final err = commitRes.stderr.trim();
     if (out.isNotEmpty) {
@@ -2824,7 +3177,10 @@ class SessionController extends SessionControllerBase {
     );
   }
 
-  Future<void> _insertEvent({required String type, required String text}) async {
+  Future<void> _insertEvent({
+    required String type,
+    required String text,
+  }) async {
     await chatController.insertMessage(
       _eventMessage(type: type, text: text),
       animated: true,
@@ -2836,11 +3192,7 @@ class SessionController extends SessionControllerBase {
       id: _uuid.v4(),
       authorId: _system,
       createdAt: DateTime.now().toUtc(),
-      metadata: {
-        'kind': 'codex_event',
-        'eventType': type,
-        'text': text,
-      },
+      metadata: {'kind': 'codex_event', 'eventType': type, 'text': text},
     );
   }
 

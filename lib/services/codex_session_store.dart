@@ -1,26 +1,26 @@
 import 'package:shared_preferences/shared_preferences.dart';
 
 class CodexSessionStore {
-  static String _keyFor(
-    String targetKey,
-    String projectPath,
-    String tabId,
-  ) =>
+  static String _keyFor(String targetKey, String projectPath, String tabId) =>
       'codex_thread_v2:$targetKey:$projectPath:$tabId';
 
   static String _tmuxKeyFor(
     String targetKey,
     String projectPath,
     String tabId,
-  ) =>
-      'codex_tmux_v1:$targetKey:$projectPath:$tabId';
+  ) => 'codex_tmux_v1:$targetKey:$projectPath:$tabId';
 
   static String _remoteJobKeyFor(
     String targetKey,
     String projectPath,
     String tabId,
-  ) =>
-      'codex_remote_job_v1:$targetKey:$projectPath:$tabId';
+  ) => 'codex_remote_job_v1:$targetKey:$projectPath:$tabId';
+
+  static String _logCursorKeyFor(
+    String targetKey,
+    String projectPath,
+    String tabId,
+  ) => 'codex_log_cursor_v1:$targetKey:$projectPath:$tabId';
 
   Future<String?> loadThreadId({
     required String targetKey,
@@ -106,7 +106,10 @@ class CodexSessionStore {
     required String remoteJobId,
   }) async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_remoteJobKeyFor(targetKey, projectPath, tabId), remoteJobId);
+    await prefs.setString(
+      _remoteJobKeyFor(targetKey, projectPath, tabId),
+      remoteJobId,
+    );
   }
 
   Future<void> clearRemoteJobId({
@@ -116,5 +119,37 @@ class CodexSessionStore {
   }) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_remoteJobKeyFor(targetKey, projectPath, tabId));
+  }
+
+  /// Stores the last consumed line number (1-based) for this tab's JSONL log.
+  /// Used to resume tailing without missing output after sleep/background/app restarts.
+  Future<int> loadLogLineCursor({
+    required String targetKey,
+    required String projectPath,
+    required String tabId,
+  }) async {
+    final prefs = await SharedPreferences.getInstance();
+    final v = prefs.getInt(_logCursorKeyFor(targetKey, projectPath, tabId));
+    if (v == null || v < 0) return 0;
+    return v;
+  }
+
+  Future<void> saveLogLineCursor({
+    required String targetKey,
+    required String projectPath,
+    required String tabId,
+    required int cursor,
+  }) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt(_logCursorKeyFor(targetKey, projectPath, tabId), cursor);
+  }
+
+  Future<void> clearLogLineCursor({
+    required String targetKey,
+    required String projectPath,
+    required String tabId,
+  }) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_logCursorKeyFor(targetKey, projectPath, tabId));
   }
 }

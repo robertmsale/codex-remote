@@ -7,11 +7,7 @@ class RunCommandSheet extends StatefulWidget {
   final String hintText;
   final Future<RunCommandResult> Function(String command) run;
 
-  const RunCommandSheet({
-    super.key,
-    required this.hintText,
-    required this.run,
-  });
+  const RunCommandSheet({super.key, required this.hintText, required this.run});
 
   @override
   State<RunCommandSheet> createState() => _RunCommandSheetState();
@@ -39,14 +35,18 @@ class _RunCommandSheetState extends State<RunCommandSheet> {
 
     try {
       final result = await widget.run(cmd);
+      if (!mounted) return;
       setState(() {
         _output = [
           'exit=${result.exitCode}',
-          if (result.stdout.trim().isNotEmpty) '--- stdout ---\n${result.stdout}',
-          if (result.stderr.trim().isNotEmpty) '--- stderr ---\n${result.stderr}',
+          if (result.stdout.trim().isNotEmpty)
+            '--- stdout ---\n${result.stdout}',
+          if (result.stderr.trim().isNotEmpty)
+            '--- stderr ---\n${result.stderr}',
         ].join('\n\n');
       });
     } catch (e) {
+      if (!mounted) return;
       setState(() => _output = 'Error: $e');
     } finally {
       if (mounted) setState(() => _running = false);
@@ -57,9 +57,9 @@ class _RunCommandSheetState extends State<RunCommandSheet> {
     if (_output.trim().isEmpty) return;
     await Clipboard.setData(ClipboardData(text: _output));
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Output copied to clipboard')),
-    );
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('Output copied to clipboard')));
   }
 
   @override
@@ -142,4 +142,3 @@ class _RunCommandSheetState extends State<RunCommandSheet> {
     );
   }
 }
-
