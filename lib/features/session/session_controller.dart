@@ -98,6 +98,7 @@ class SessionController extends SessionControllerBase {
   static const _clientUserMessageType = 'client.user_message';
   static const _clientGitCommitType = 'client.git_commit';
   static const _serverGitCommitType = 'server.git_commit';
+  static const _serverGitignoreBootstrapType = 'server.gitignore_bootstrap';
   static const _maxImageBytes = 10 * 1024 * 1024;
 
   @override
@@ -764,6 +765,8 @@ class SessionController extends SessionControllerBase {
   }
 
   Future<void> _ensureFieldExecDirsLocal() async {
+    await _ensureFieldExecIgnoredInGitignoreLocal();
+    await _ensureFieldExecExcludedLocal();
     final dir = Directory(_joinPosix(projectPath, _fieldExecDir));
     await dir.create(recursive: true);
     await Directory(
@@ -822,8 +825,23 @@ class SessionController extends SessionControllerBase {
     final jobAbs = _remoteAbsPath(_jobRelPath);
     final pidAbs = _remoteAbsPath(_pidRelPath);
 
-    final cmd =
-        'mkdir -p ${_shQuote(sessionsAbs)} ${_shQuote(tmpAbs)} && touch ${_shQuote(logAbs)} ${_shQuote(errAbs)} ${_shQuote(jobAbs)} ${_shQuote(pidAbs)}';
+    final ignoreLine = _shQuote('**/.field_exec/');
+    final cd = _shQuote(projectPath);
+    final cmd = [
+      'cd $cd || exit 0',
+      // Ensure .field_exec is ignored early to keep the repo clean for any
+      // server-side bootstrap commits (and to discourage agents from deleting it).
+      'if command -v git >/dev/null 2>&1 && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then',
+      r'  exclude_path="$(git rev-parse --git-path info/exclude 2>/dev/null || true)"',
+      r'  if [ -n "$exclude_path" ]; then',
+      r'    exclude_dir="$(dirname "$exclude_path")"',
+      r'    mkdir -p "$exclude_dir" >/dev/null 2>&1 || true',
+      r'    touch "$exclude_path" >/dev/null 2>&1 || true',
+      '    grep -qxF $ignoreLine "\$exclude_path" 2>/dev/null || printf %s\\\\n $ignoreLine >> "\$exclude_path" || true',
+      '  fi',
+      'fi',
+      'mkdir -p ${_shQuote(sessionsAbs)} ${_shQuote(tmpAbs)} && touch ${_shQuote(logAbs)} ${_shQuote(errAbs)} ${_shQuote(jobAbs)} ${_shQuote(pidAbs)}',
+    ].join('\n');
     await run(_wrapWithShell(profile, cmd));
   }
 
@@ -1290,6 +1308,28 @@ class SessionController extends SessionControllerBase {
         '  echo "Failed to extract prompt from last JSONL log line (install jq or ensure plutil is available)." >&2',
         '  exit 2',
         'fi',
+        '',
+        '# Bootstrap .gitignore for .field_exec to keep agent logs safe.',
+        'if command -v git >/dev/null 2>&1 && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then',
+        '  before_status="\$(git status --porcelain 2>/dev/null || true)"',
+        '  changed=0',
+        '  if [ ! -f .gitignore ]; then : > .gitignore; changed=1; fi',
+        '  if ! grep -qxF ${_shQuote('**/.field_exec/')} .gitignore 2>/dev/null; then',
+        '    printf %s\\\\n ${_shQuote('**/.field_exec/')} >> .gitignore',
+        '    changed=1',
+        '  fi',
+        '  if [ "\$changed" -eq 1 ]; then',
+        '    if [ -z "\$before_status" ]; then',
+        '      if git add .gitignore >/dev/null 2>&1 && git commit -m ${_shQuote('chore: ignore .field_exec')} >/dev/null 2>&1; then',
+        '        printf %s\\\\n \'{"type":"$_serverGitignoreBootstrapType","status":"committed"}\'',
+        '      else',
+        '        printf %s\\\\n \'{"type":"$_serverGitignoreBootstrapType","status":"updated"}\'',
+        '      fi',
+        '    else',
+        '      printf %s\\\\n \'{"type":"$_serverGitignoreBootstrapType","status":"updated"}\'',
+        '    fi',
+        '  fi',
+        'fi',
         'printf %s\\\\n "\$prompt" | "\$CODEX_BIN" $codexArgs',
         // If the last JSONL event is missing a trailing newline, tail/line-splitting
         // can get stuck "waiting" forever. Force a final newline so the client
@@ -1326,7 +1366,7 @@ class SessionController extends SessionControllerBase {
         'if [ -n "\$exclude_path" ]; then',
         '  mkdir -p "\$(dirname "\$exclude_path")" >/dev/null 2>&1 || true',
         '  touch "\$exclude_path" >/dev/null 2>&1 || true',
-        '  grep -qxF ${_shQuote('.field_exec/')} "\$exclude_path" 2>/dev/null || printf %s\\\\n ${_shQuote('.field_exec/')} >> "\$exclude_path" || true',
+        '  grep -qxF ${_shQuote('**/.field_exec/')} "\$exclude_path" 2>/dev/null || printf %s\\\\n ${_shQuote('**/.field_exec/')} >> "\$exclude_path" || true',
         'fi',
         '',
         'changes="\$(git status --porcelain 2>/dev/null || true)"',
@@ -2597,6 +2637,13 @@ class SessionController extends SessionControllerBase {
       }
       return;
     }
+    if (type == _serverGitignoreBootstrapType) {
+      final out = await _materializeCodexJsonEvent(event, replay: false);
+      if (out.isNotEmpty) {
+        await chatController.insertAllMessages(out, animated: true);
+      }
+      return;
+    }
 
     if (type == 'thread.started') {
       final id = event['thread_id'] as String?;
@@ -2939,6 +2986,21 @@ class SessionController extends SessionControllerBase {
       ];
     }
 
+    if (type == _serverGitignoreBootstrapType) {
+      final status = event['status']?.toString().trim() ?? '';
+      final summary = [
+        'server',
+        'gitignore',
+        if (status.isNotEmpty) status,
+      ].join(' • ');
+      return [
+        _eventMessage(
+          type: 'gitignore_bootstrap',
+          text: summary.isEmpty ? 'Server gitignore bootstrap.' : summary,
+        ),
+      ];
+    }
+
     if (type == 'thread.started') {
       final id = event['thread_id'] as String?;
       if (id != null && id.isNotEmpty) {
@@ -3263,23 +3325,113 @@ class SessionController extends SessionControllerBase {
   }
 
   Future<void> _ensureFieldExecExcludedLocal() async {
-    final gitDir = Directory(_joinPosix(projectPath, '.git'));
-    if (!gitDir.existsSync()) return;
+    // Best-effort: support running from subdirectories and worktrees.
+    try {
+      final top = await _localShell.run(
+        executable: 'git',
+        arguments: const ['rev-parse', '--show-toplevel'],
+        workingDirectory: projectPath,
+        throwOnError: false,
+      );
+      if (top.exitCode != 0) return;
+      final root = (top.stdout as Object?)?.toString().trim() ?? '';
+      if (root.isEmpty) return;
 
-    final excludeFile = File(_joinPosix(projectPath, '.git/info/exclude'));
-    await excludeFile.parent.create(recursive: true);
+      final pathRes = await _localShell.run(
+        executable: 'git',
+        arguments: const ['rev-parse', '--git-path', 'info/exclude'],
+        workingDirectory: projectPath,
+        throwOnError: false,
+      );
+      if (pathRes.exitCode != 0) return;
+      final raw = (pathRes.stdout as Object?)?.toString().trim() ?? '';
+      if (raw.isEmpty) return;
 
-    final existing = await excludeFile.exists()
-        ? await excludeFile.readAsString()
-        : '';
-    const line = '.field_exec/';
-    if (existing.split('\n').any((l) => l.trim() == line)) return;
+      final abs = raw.startsWith('/') ? raw : _joinPosix(root, raw);
+      final excludeFile = File(abs);
+      await excludeFile.parent.create(recursive: true);
 
-    final needsNewline = existing.isNotEmpty && !existing.endsWith('\n');
-    await excludeFile.writeAsString(
-      "${needsNewline ? '\n' : ''}$line\n",
-      mode: FileMode.append,
-    );
+      final existing = await excludeFile.exists()
+          ? await excludeFile.readAsString()
+          : '';
+      const line = '**/.field_exec/';
+      if (existing.split('\n').any((l) => l.trim() == line)) return;
+
+      final needsNewline = existing.isNotEmpty && !existing.endsWith('\n');
+      await excludeFile.writeAsString(
+        "${needsNewline ? '\n' : ''}$line\n",
+        mode: FileMode.append,
+      );
+    } catch (_) {}
+  }
+
+  Future<void> _ensureFieldExecIgnoredInGitignoreLocal() async {
+    // Best-effort: only applies to git repos and should never block a turn.
+    try {
+      final res = await _localShell.run(
+        executable: 'git',
+        arguments: const ['rev-parse', '--show-toplevel'],
+        workingDirectory: projectPath,
+        throwOnError: false,
+      );
+      if (res.exitCode != 0) return;
+      final root = (res.stdout as Object?)?.toString().trim() ?? '';
+      if (root.isEmpty) return;
+
+      final ignoreFile = File(_joinPosix(root, '.gitignore'));
+      final existing = await ignoreFile.exists()
+          ? await ignoreFile.readAsString()
+          : '';
+      const line = '**/.field_exec/';
+      if (existing.split('\n').any((l) => l.trim() == line)) return;
+
+      final beforeStatus = await _localShell.run(
+        executable: 'git',
+        arguments: const ['status', '--porcelain'],
+        workingDirectory: root,
+        throwOnError: false,
+      );
+      final wasClean =
+          beforeStatus.exitCode == 0 &&
+          ((beforeStatus.stdout as Object?)?.toString().trim() ?? '').isEmpty;
+
+      final needsNewline = existing.isNotEmpty && !existing.endsWith('\n');
+      await ignoreFile.writeAsString(
+        "${needsNewline ? '\n' : ''}$line\n",
+        mode: FileMode.append,
+      );
+
+      if (wasClean) {
+        await _localShell.run(
+          executable: 'git',
+          arguments: const ['add', '.gitignore'],
+          workingDirectory: root,
+          throwOnError: false,
+        );
+        final commit = await _localShell.run(
+          executable: 'git',
+          arguments: const ['commit', '-m', 'chore: ignore .field_exec'],
+          workingDirectory: root,
+          throwOnError: false,
+        );
+        if (commit.exitCode == 0) {
+          await _insertEvent(
+            type: 'gitignore_bootstrap',
+            text: 'Committed .gitignore to ignore .field_exec.',
+          );
+        } else {
+          await _insertEvent(
+            type: 'gitignore_bootstrap',
+            text: 'Updated .gitignore to ignore .field_exec.',
+          );
+        }
+      } else {
+        await _insertEvent(
+          type: 'gitignore_bootstrap',
+          text: 'Updated .gitignore to ignore .field_exec.',
+        );
+      }
+    } catch (_) {}
   }
 
   Future<void> _insertEvent({
