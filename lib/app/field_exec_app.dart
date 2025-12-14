@@ -6,8 +6,8 @@ import 'bindings/initial_binding.dart';
 import 'routes/app_pages.dart';
 import '../services/theme_mode_service.dart';
 
-class CodexRemoteApp extends StatelessWidget {
-  const CodexRemoteApp({super.key});
+class FieldExecApp extends StatelessWidget {
+  const FieldExecApp({super.key});
 
   ThemeData _lightTheme() {
     return ThemeData(
@@ -34,7 +34,7 @@ class CodexRemoteApp extends StatelessWidget {
 
     if (service == null) {
       return GetMaterialApp(
-        title: 'Codex Remote',
+        title: 'FieldExec',
         debugShowCheckedModeBanner: false,
         theme: _lightTheme(),
         darkTheme: _darkTheme(),
@@ -47,7 +47,7 @@ class CodexRemoteApp extends StatelessWidget {
 
     return Obx(
       () => GetMaterialApp(
-        title: 'Codex Remote',
+        title: 'FieldExec',
         debugShowCheckedModeBanner: false,
         theme: _lightTheme(),
         darkTheme: _darkTheme(),

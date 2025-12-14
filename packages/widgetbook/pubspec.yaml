@@ -1,4 +1,4 @@
-name: codex_remote_widgetbook
+name: field_exec_widgetbook
 description: Widgetbook app for design_system using mock controllers.
 publish_to: 'none'
 

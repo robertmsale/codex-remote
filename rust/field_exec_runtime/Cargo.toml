@@ -1,5 +1,5 @@
 [package]
-name = "codex_remote_runtime"
+name = "field_exec_runtime"
 version = "0.1.0"
 edition = "2024"
 
@@ -9,9 +9,9 @@ expect_used = "deny"
 wildcard_imports = "deny"
 
 [dependencies]
-codex_remote_adapters = { path = "../codex_remote_adapters" }
-codex_remote_rinf = { path = "../codex_remote_rinf" }
-codex_remote_api = { path = "../../native/codex_remote_api" }
+field_exec_adapters = { path = "../field_exec_adapters" }
+field_exec_rinf = { path = "../field_exec_rinf" }
+field_exec_api = { path = "../../native/field_exec_api" }
 rinf = "8.8.1"
 tokio = { version = "1.45.0", features = ["rt", "sync", "time"] }
 async-ssh2-tokio = "0.12.1"

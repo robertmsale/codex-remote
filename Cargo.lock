@@ -307,50 +307,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "codex_remote_adapters"
-version = "0.1.0"
-dependencies = [
- "async-ssh2-tokio",
- "tokio",
-]
-
-[[package]]
-name = "codex_remote_api"
-version = "0.1.0"
-dependencies = [
- "rinf",
- "serde",
-]
-
-[[package]]
-name = "codex_remote_core"
-version = "0.1.0"
-
-[[package]]
-name = "codex_remote_rinf"
-version = "0.1.0"
-dependencies = [
- "codex_remote_api",
- "rinf",
- "tokio",
-]
-
-[[package]]
-name = "codex_remote_runtime"
-version = "0.1.0"
-dependencies = [
- "async-ssh2-tokio",
- "codex_remote_adapters",
- "codex_remote_api",
- "codex_remote_rinf",
- "internal-russh-forked-ssh-key",
- "rand_core 0.6.4",
- "rinf",
- "russh",
- "tokio",
-]
-
-[[package]]
 name = "const-oid"
 version = "0.9.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -608,6 +564,50 @@ name = "fiat-crypto"
 version = "0.2.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "28dea519a9695b9977216879a3ebfddf92f1c08c05d984f8996aecd6ecdc811d"
+
+[[package]]
+name = "field_exec_adapters"
+version = "0.1.0"
+dependencies = [
+ "async-ssh2-tokio",
+ "tokio",
+]
+
+[[package]]
+name = "field_exec_api"
+version = "0.1.0"
+dependencies = [
+ "rinf",
+ "serde",
+]
+
+[[package]]
+name = "field_exec_core"
+version = "0.1.0"
+
+[[package]]
+name = "field_exec_rinf"
+version = "0.1.0"
+dependencies = [
+ "field_exec_api",
+ "rinf",
+ "tokio",
+]
+
+[[package]]
+name = "field_exec_runtime"
+version = "0.1.0"
+dependencies = [
+ "async-ssh2-tokio",
+ "field_exec_adapters",
+ "field_exec_api",
+ "field_exec_rinf",
+ "internal-russh-forked-ssh-key",
+ "rand_core 0.6.4",
+ "rinf",
+ "russh",
+ "tokio",
+]
 
 [[package]]
 name = "find-msvc-tools"
@@ -892,8 +892,8 @@ dependencies = [
 name = "hub"
 version = "0.1.0"
 dependencies = [
- "codex_remote_api",
- "codex_remote_runtime",
+ "field_exec_api",
+ "field_exec_runtime",
  "rinf",
  "serde",
  "tokio",

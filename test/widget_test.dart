@@ -7,14 +7,14 @@
 
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:codex_remote/app/codex_remote_app.dart';
+import 'package:field_exec/app/field_exec_app.dart';
 
 void main() {
   testWidgets('App boots to connection screen', (WidgetTester tester) async {
-    await tester.pumpWidget(const CodexRemoteApp());
+    await tester.pumpWidget(const FieldExecApp());
     await tester.pumpAndSettle();
 
-    expect(find.text('Codex Remote'), findsOneWidget);
+    expect(find.text('FieldExec'), findsOneWidget);
     final hasRemoteField = find.text('username@host').evaluate().isNotEmpty;
     final hasLocalHint =
         find.textContaining('Local mode runs Codex').evaluate().isNotEmpty;

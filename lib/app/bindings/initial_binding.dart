@@ -6,7 +6,7 @@ import '../../features/settings/settings_controller.dart';
 import '../../features/settings/keys/keys_controller.dart';
 import '../../features/settings/keys/install_key_controller.dart';
 import '../../services/connection_history_service.dart';
-import '../../services/codex_session_store.dart';
+import '../../services/field_exec_session_store.dart';
 import '../../services/conversation_store.dart';
 import '../../services/app_lifecycle_service.dart';
 import '../../services/local_shell_service.dart';
@@ -29,7 +29,7 @@ class InitialBinding extends Bindings {
       ConnectionHistoryService(),
       permanent: true,
     );
-    Get.put<CodexSessionStore>(CodexSessionStore(), permanent: true);
+    Get.put<FieldExecSessionStore>(FieldExecSessionStore(), permanent: true);
     Get.put<ProjectStore>(ProjectStore(), permanent: true);
     Get.put<ProjectTabsStore>(ProjectTabsStore(), permanent: true);
     Get.put<ConversationStore>(ConversationStore(), permanent: true);

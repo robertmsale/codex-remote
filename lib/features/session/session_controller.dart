@@ -12,7 +12,7 @@ import 'package:uuid/uuid.dart';
 import '../../codex/codex_command.dart';
 import '../../codex/codex_events.dart';
 import '../../codex/codex_output_schema.dart';
-import '../../services/codex_session_store.dart';
+import '../../services/field_exec_session_store.dart';
 import '../../services/conversation_store.dart';
 import '../../services/local_shell_service.dart';
 import '../../services/active_session_service.dart';
@@ -49,10 +49,10 @@ class SessionController extends SessionControllerBase {
   Timer? _cursorSaveTimer;
   Future<void> _cursorSaveQueue = Future.value();
 
-  static const _codexRemoteDir = '.codex_remote';
-  String get _schemaRelPath => '$_codexRemoteDir/output-schema.json';
-  String get _sessionsDirRelPath => '$_codexRemoteDir/sessions';
-  String get _tmpDirRelPath => '$_codexRemoteDir/tmp';
+  static const _fieldExecDir = '.field_exec';
+  String get _schemaRelPath => '$_fieldExecDir/output-schema.json';
+  String get _sessionsDirRelPath => '$_fieldExecDir/sessions';
+  String get _tmpDirRelPath => '$_fieldExecDir/tmp';
   String get _logRelPath => '$_sessionsDirRelPath/$tabId.log';
   String get _stderrLogRelPath => '$_sessionsDirRelPath/$tabId.stderr.log';
   String get _jobRelPath => '$_sessionsDirRelPath/$tabId.job';
@@ -82,7 +82,7 @@ class SessionController extends SessionControllerBase {
     required this.tabId,
   }) : chatController = InMemoryChatController();
 
-  CodexSessionStore get _sessionStore => Get.find<CodexSessionStore>();
+  FieldExecSessionStore get _sessionStore => Get.find<FieldExecSessionStore>();
   ConversationStore get _conversationStore => Get.find<ConversationStore>();
   SecureStorageService get _storage => Get.find<SecureStorageService>();
   SshService get _ssh => Get.find<SshService>();
@@ -762,8 +762,8 @@ class SessionController extends SessionControllerBase {
     );
   }
 
-  Future<void> _ensureCodexRemoteDirsLocal() async {
-    final dir = Directory(_joinPosix(projectPath, _codexRemoteDir));
+  Future<void> _ensureFieldExecDirsLocal() async {
+    final dir = Directory(_joinPosix(projectPath, _fieldExecDir));
     await dir.create(recursive: true);
     await Directory(
       _joinPosix(projectPath, _sessionsDirRelPath),
@@ -779,7 +779,7 @@ class SessionController extends SessionControllerBase {
     await File(_joinPosix(projectPath, _pidRelPath)).create(recursive: true);
   }
 
-  Future<void> _ensureCodexRemoteDirsRemote() async {
+  Future<void> _ensureFieldExecDirsRemote() async {
     final profile = target.profile!;
     final pem = await _storage.read(
       key: SecureStorageService.sshPrivateKeyPemKey,
@@ -1009,7 +1009,7 @@ class SessionController extends SessionControllerBase {
       thinkingPreview.value = null;
       _cancelCurrent = null;
       try {
-        await _ensureCodexRemoteDirsLocal();
+        await _ensureFieldExecDirsLocal();
         await _ensureSchema(schemaContents: CodexOutputSchema.encode());
 
         final cmd = CodexCommandBuilder.build(
@@ -1113,7 +1113,7 @@ class SessionController extends SessionControllerBase {
 
   Future<void> _appendClientJsonlToLog({required String jsonlLine}) async {
     if (target.local) {
-      await _ensureCodexRemoteDirsLocal();
+      await _ensureFieldExecDirsLocal();
       final file = File(_joinPosix(projectPath, _logRelPath));
       await file.writeAsString('$jsonlLine\n', mode: FileMode.append);
       return;
@@ -1209,7 +1209,7 @@ class SessionController extends SessionControllerBase {
 
     try {
       await _stopRemoteJobBestEffort();
-      await _ensureCodexRemoteDirsRemote();
+      await _ensureFieldExecDirsRemote();
       await _ensureSchema(schemaContents: CodexOutputSchema.encode());
 
       final schemaAbs = _remoteAbsPath(_schemaRelPath);
@@ -1307,13 +1307,13 @@ class SessionController extends SessionControllerBase {
         'if [ -n "\$TMUX_BIN" ]; then',
         '  "\$TMUX_BIN" new-session -d -s ${_shQuote(tmuxName)} sh -c ${_shQuote(runBody)}',
         '  echo "tmux:$tmuxName" > ${_shQuote(jobAbs)}',
-        '  printf %s\\\\n "CODEX_REMOTE_JOB=tmux:$tmuxName"',
+        '  printf %s\\\\n "FIELD_EXEC_JOB=tmux:$tmuxName"',
         'else',
         '  nohup sh -c ${_shQuote(runBody)} >/dev/null 2>&1 &',
         '  pid=\$!',
         '  echo "\$pid" > ${_shQuote(pidAbs)}',
         '  echo "pid:\$pid" > ${_shQuote(jobAbs)}',
-        '  printf %s\\\\n "CODEX_REMOTE_JOB=pid:\$pid"',
+        '  printf %s\\\\n "FIELD_EXEC_JOB=pid:\$pid"',
         'fi',
       ].join('\n');
       final startCmd = 'sh -c ${_shQuote(startBody)}';
@@ -1347,12 +1347,12 @@ class SessionController extends SessionControllerBase {
 
       String? jobLine;
       for (final line in [...stdout, ...stderr].reversed) {
-        if (line.startsWith('CODEX_REMOTE_JOB=')) {
+        if (line.startsWith('FIELD_EXEC_JOB=')) {
           jobLine = line;
           break;
         }
       }
-      var remoteJobId = jobLine?.substring('CODEX_REMOTE_JOB='.length).trim();
+      var remoteJobId = jobLine?.substring('FIELD_EXEC_JOB='.length).trim();
       if (remoteJobId == null || remoteJobId.isEmpty) {
         try {
           final readJob = await _ssh.runCommandWithResult(
@@ -2481,7 +2481,7 @@ class SessionController extends SessionControllerBase {
     final pattern = _shQuote('"thread_id":"$threadId"');
     final findCmd = [
       'cd ${_shQuote(projectPath)} || exit 0',
-      'if [ ! -d ${_shQuote(_codexRemoteDir)} ]; then exit 0; fi',
+      'if [ ! -d ${_shQuote(_fieldExecDir)} ]; then exit 0; fi',
       'for f in \$(ls -t ${_shQuote(_sessionsDirRelPath)}/*.log 2>/dev/null); do',
       '  case "\$f" in',
       '    *.stderr.log) continue ;;',
@@ -2962,7 +2962,7 @@ class SessionController extends SessionControllerBase {
     String commitMessage, {
     String? sourceItemId,
   }) async {
-    await _ensureCodexRemoteExcludedLocal();
+    await _ensureFieldExecExcludedLocal();
 
     await _appendClientJsonlToLog(
       jsonlLine: _clientGitCommitJsonlLine(
@@ -3095,7 +3095,7 @@ class SessionController extends SessionControllerBase {
 
     final cd = _shQuote(projectPath);
     await runWithResult(
-      'cd $cd && if [ -d .git ]; then mkdir -p .git/info; touch .git/info/exclude; grep -qxF ${_shQuote('.codex_remote/')} .git/info/exclude || printf %s\\\\n ${_shQuote('.codex_remote/')} >> .git/info/exclude; fi',
+      'cd $cd && if [ -d .git ]; then mkdir -p .git/info; touch .git/info/exclude; grep -qxF ${_shQuote('.field_exec/')} .git/info/exclude || printf %s\\\\n ${_shQuote('.field_exec/')} >> .git/info/exclude; fi',
     );
     final statusRes = await runWithResult('cd $cd && git status --porcelain');
     final statusOut = statusRes.stdout.trim();
@@ -3157,7 +3157,7 @@ class SessionController extends SessionControllerBase {
 
   static String _shQuote(String s) => "'${s.replaceAll("'", "'\\''")}'";
 
-  Future<void> _ensureCodexRemoteExcludedLocal() async {
+  Future<void> _ensureFieldExecExcludedLocal() async {
     final gitDir = Directory(_joinPosix(projectPath, '.git'));
     if (!gitDir.existsSync()) return;
 
@@ -3167,7 +3167,7 @@ class SessionController extends SessionControllerBase {
     final existing = await excludeFile.exists()
         ? await excludeFile.readAsString()
         : '';
-    const line = '.codex_remote/';
+    const line = '.field_exec/';
     if (existing.split('\n').any((l) => l.trim() == line)) return;
 
     final needsNewline = existing.isNotEmpty && !existing.endsWith('\n');

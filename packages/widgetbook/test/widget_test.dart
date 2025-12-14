@@ -8,11 +8,11 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:widgetbook/widgetbook.dart';
 
-import 'package:codex_remote_widgetbook/main.dart';
+import 'package:field_exec_widgetbook/main.dart';
 
 void main() {
   testWidgets('Widgetbook boots', (WidgetTester tester) async {
-    await tester.pumpWidget(const CodexRemoteWidgetbookApp());
+    await tester.pumpWidget(const FieldExecWidgetbookApp());
     await tester.pumpAndSettle();
 
     expect(find.byType(Widgetbook), findsOneWidget);

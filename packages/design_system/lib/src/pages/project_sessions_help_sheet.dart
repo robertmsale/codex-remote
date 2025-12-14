@@ -13,7 +13,7 @@ class ProjectSessionsHelpSheet extends StatelessWidget {
           Text('Help', style: textTheme.titleLarge),
           const SizedBox(height: 12),
           Text(
-            'Codex Remote runs Codex CLI sessions either locally (macOS) or over SSH (iOS/macOS).',
+            'FieldExec runs Codex CLI sessions either locally (macOS) or over SSH (iOS/macOS).',
             style: textTheme.bodyMedium,
           ),
           const SizedBox(height: 16),
@@ -58,4 +58,3 @@ class _HelpBullet extends StatelessWidget {
     );
   }
 }
-

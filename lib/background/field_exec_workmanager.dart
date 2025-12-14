@@ -13,11 +13,11 @@ import '../services/remote_jobs_store.dart';
 import '../services/secure_storage_service.dart';
 import '../services/ssh_service.dart';
 
-const codexRemoteBackgroundRefreshTaskId =
-    'com.openai.codexremote.iOSBackgroundAppRefresh';
+const fieldExecBackgroundRefreshTaskId =
+    'com.robertsale.fieldexec.iOSBackgroundAppRefresh';
 
 @pragma('vm:entry-point')
-void codexRemoteCallbackDispatcher() {
+void fieldExecCallbackDispatcher() {
   Workmanager().executeTask((task, inputData) async {
     try {
       DartPluginRegistrant.ensureInitialized();
@@ -133,7 +133,7 @@ Future<bool?> _inferTurnSuccessFromRemoteLog({
 }) async {
   final logAbs = _joinPosix(
     job.projectPath,
-    '.codex_remote/sessions/${job.tabId}.log',
+    '.field_exec/sessions/${job.tabId}.log',
   );
   final cmd =
       'sh -c ${_shQuote('if [ -f ${_shQuote(logAbs)} ]; then tail -n 400 ${_shQuote(logAbs)}; fi')}';

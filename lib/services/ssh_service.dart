@@ -197,7 +197,7 @@ class SshService {
     required String password,
     required String privateKeyPem,
     String? privateKeyPassphrase,
-    String comment = 'codex-remote',
+    String comment = 'field-exec',
   }) {
     return RustSshService.installPublicKey(
       userAtHost: userAtHost,
@@ -209,4 +209,3 @@ class SshService {
     );
   }
 }
-

@@ -1,7 +1,7 @@
 import '../rinf/rust_ssh_service.dart';
 
 class SshKeyService {
-  static const defaultComment = 'codex-remote';
+  static const defaultComment = 'field-exec';
 
   Future<String> generateEd25519PrivateKeyPem({String comment = defaultComment}) {
     return RustSshService.generateEd25519PrivateKeyPem(comment: comment);
@@ -19,4 +19,3 @@ class SshKeyService {
     );
   }
 }
-

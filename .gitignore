@@ -44,7 +44,7 @@ app.*.map.json
 /android/app/profile
 /android/app/release
 
-.codex_remote
+.field_exec
 
 # Rust related
 /.cargo/

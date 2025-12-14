@@ -1,10 +1,10 @@
-# Codex Remote
+# FieldExec
 
-Codex Remote is a Flutter app (iOS + macOS) that lets you run Codex CLI “sessions” on your Mac—either **over SSH** (from iOS or macOS) or **locally** (macOS).
+FieldExec is a Flutter app (iOS + macOS) that lets you run Codex CLI “sessions” on your Mac—either **over SSH** (from iOS or macOS) or **locally** (macOS).
 
 It’s designed for concurrency: you can keep multiple projects and multiple sessions running at once, switch between them, and resume past conversations by thread ID.
 
-![Codex Remote screenshot](assets/screenshot.png)
+![FieldExec screenshot](assets/screenshot.png)
 
 ## Features
 
@@ -28,7 +28,7 @@ Each user message starts a non-interactive Codex turn:
 
 - Remote: the app starts a background job on the remote host that runs `codex exec --json --output-schema …` in the selected project directory.
 - The job appends JSONL output to a project-local log file:
-  - `.codex_remote/sessions/<tabId>.log`
+  - `.field_exec/sessions/<tabId>.log`
 - The app tails that file over SSH and renders events/messages in the chat UI.
 
 On macOS local mode, the app runs `codex` locally and streams stdout/stderr into the chat in the same JSONL format.
@@ -64,7 +64,7 @@ flutter run -d ios
 
 ## UI Catalog (widgetbook)
 
-To iterate on UI without running Codex Remote’s services, run the standalone catalog app:
+To iterate on UI without running FieldExec’s services, run the standalone catalog app:
 
 ```bash
 cd packages/widgetbook
@@ -108,14 +108,14 @@ Currently the app supports **one global key**.
 
 - Private keys are stored using `flutter_secure_storage` (Apple Keychain).
 - Passwords are never stored.
-- Session logs are written into the project under `.codex_remote/`.
-  - The app automatically adds `.codex_remote/` to `.git/info/exclude` before auto-commit so logs/schema don’t get committed.
+- Session logs are written into the project under `.field_exec/`.
+  - The app automatically adds `.field_exec/` to `.git/info/exclude` before auto-commit so logs/schema don’t get committed.
 
 ## Troubleshooting
 
 - If you don’t see `tmux` sessions on the remote host, install `tmux` or the app will fall back to `nohup`+PID.
 - To inspect remote processes: `ps -ax | grep codex`
-- The active remote session log is in `.codex_remote/sessions/<tabId>.log`
+- The active remote session log is in `.field_exec/sessions/<tabId>.log`
 
 ## License
 

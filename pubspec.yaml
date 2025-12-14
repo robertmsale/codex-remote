@@ -1,4 +1,4 @@
-name: codex_remote
+name: field_exec
 description: "A new Flutter project."
 # The following line prevents the package from being accidentally published to
 # pub.dev using `flutter pub publish`. This is preferred for private packages.
@@ -109,5 +109,5 @@ flutter:
 rinf:
   gen_input_crates:
     - hub
-    - codex_remote_api
+    - field_exec_api
   gen_output_dir: lib/src/bindings

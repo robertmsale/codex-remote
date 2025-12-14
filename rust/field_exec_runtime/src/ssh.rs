@@ -3,14 +3,14 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_ssh2_tokio::Error as SshError;
-use codex_remote_adapters::ssh::{run_command, SshAuth, SshTimeouts};
-use codex_remote_api::signals::{
+use field_exec_adapters::ssh::{run_command, SshAuth, SshTimeouts};
+use field_exec_api::signals::{
     AuthProvide, AuthRequired, SshAuthorizedKeyRequest, SshAuthorizedKeyResponse, SshCancelStream,
     SshExecRequest, SshExecResponse, SshGenerateKeyRequest, SshGenerateKeyResponse,
     SshInstallPublicKeyRequest, SshInstallPublicKeyResponse, SshStartCommandRequest,
     SshStartCommandResponse, SshStreamExit, SshStreamLine, SshWriteFileRequest, SshWriteFileResponse,
 };
-use codex_remote_rinf::storage::StorageClient;
+use field_exec_rinf::storage::StorageClient;
 use rinf::{DartSignal, RustSignal};
 use rand_core::OsRng;
 use ssh_key::{Algorithm, LineEnding, PrivateKey};

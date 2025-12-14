@@ -10,7 +10,7 @@ import 'package:uuid/uuid.dart';
 
 import '../../services/active_session_service.dart';
 import '../../services/conversation_store.dart';
-import '../../services/codex_session_store.dart';
+import '../../services/field_exec_session_store.dart';
 import '../../services/project_tabs_store.dart';
 import '../../rinf/rust_ssh_service.dart';
 import '../session/session_controller.dart';
@@ -33,7 +33,7 @@ class ProjectSessionsController extends ProjectSessionsControllerBase {
   Worker? _activeWorker1;
   Worker? _activeWorker2;
 
-  CodexSessionStore get _store => Get.find<CodexSessionStore>();
+  FieldExecSessionStore get _store => Get.find<FieldExecSessionStore>();
   ProjectTabsStore get _tabsStore => Get.find<ProjectTabsStore>();
   ConversationStore get _conversations => Get.find<ConversationStore>();
   ActiveSessionService get _active => Get.find<ActiveSessionService>();
@@ -231,7 +231,7 @@ class ProjectSessionsController extends ProjectSessionsControllerBase {
     if (!Platform.isMacOS) return const [];
 
     final sessionsDir = Directory(
-      '${args.project.path}/.codex_remote/sessions',
+      '${args.project.path}/.field_exec/sessions',
     );
     if (!await sessionsDir.exists()) return const [];
 
@@ -275,13 +275,13 @@ class ProjectSessionsController extends ProjectSessionsControllerBase {
 
     // Single remote command to keep SSH overhead low. Emit markers and raw JSONL
     // so parsing/JSON decoding happens locally (handles proper escaping).
-    const begin = '__CODEX_REMOTE_LOG_BEGIN__';
-    const tail = '__CODEX_REMOTE_LOG_TAIL__';
-    const end = '__CODEX_REMOTE_LOG_END__';
+    const begin = '__FIELD_EXEC_LOG_BEGIN__';
+    const tail = '__FIELD_EXEC_LOG_TAIL__';
+    const end = '__FIELD_EXEC_LOG_END__';
 
     final script =
         '''
-DIR=".codex_remote/sessions"
+DIR=".field_exec/sessions"
 files=\$(ls -t "\$DIR"/*.log 2>/dev/null | grep -v '\\\\.stderr\\\\.log\$' | head -n 80 || true)
 printf "%s\\n" "\$files" | while IFS= read -r f; do
   [ -f "\$f" ] || continue
@@ -490,10 +490,10 @@ done
     final session = sessionForTab(active);
 
     // If this device has never used this tab before, populate the stored
-    // remote job id from the project's `.codex_remote` artifacts so we can
+    // remote job id from the project's `.field_exec` artifacts so we can
     // "latch onto" an in-progress tmux/nohup job and start tailing logs.
     if (!args.target.local) {
-      final jobRelPath = '.codex_remote/sessions/$tabId.job';
+      final jobRelPath = '.field_exec/sessions/$tabId.job';
       try {
         final res = await runShellCommand(
           'if [ -f ${_shQuote(jobRelPath)} ]; then head -n 1 ${_shQuote(jobRelPath)}; fi',

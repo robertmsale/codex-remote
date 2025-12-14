@@ -52,7 +52,7 @@
 	</array>
 	<key>BGTaskSchedulerPermittedIdentifiers</key>
 	<array>
-		<string>com.openai.codexremote.iOSBackgroundAppRefresh</string>
+		<string>com.robertsale.fieldexec.iOSBackgroundAppRefresh</string>
 	</array>
 </dict>
 </plist>

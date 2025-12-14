@@ -1,26 +1,26 @@
 import 'package:shared_preferences/shared_preferences.dart';
 
-class CodexSessionStore {
+class FieldExecSessionStore {
   static String _keyFor(String targetKey, String projectPath, String tabId) =>
-      'codex_thread_v2:$targetKey:$projectPath:$tabId';
+      'field_exec_thread_v2:$targetKey:$projectPath:$tabId';
 
   static String _tmuxKeyFor(
     String targetKey,
     String projectPath,
     String tabId,
-  ) => 'codex_tmux_v1:$targetKey:$projectPath:$tabId';
+  ) => 'field_exec_tmux_v1:$targetKey:$projectPath:$tabId';
 
   static String _remoteJobKeyFor(
     String targetKey,
     String projectPath,
     String tabId,
-  ) => 'codex_remote_job_v1:$targetKey:$projectPath:$tabId';
+  ) => 'field_exec_remote_job_v1:$targetKey:$projectPath:$tabId';
 
   static String _logCursorKeyFor(
     String targetKey,
     String projectPath,
     String tabId,
-  ) => 'codex_log_cursor_v1:$targetKey:$projectPath:$tabId';
+  ) => 'field_exec_log_cursor_v1:$targetKey:$projectPath:$tabId';
 
   Future<String?> loadThreadId({
     required String targetKey,

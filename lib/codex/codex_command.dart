@@ -22,7 +22,7 @@ You MUST produce a final response that is valid JSON matching the schema passed 
   - Each entry must include `path` as an absolute filesystem path inside the workspace (project directory).
   - Optionally include a short `caption`.
   - The client may fetch these images and display them in the chat.
-  - You may use a .gitignored path for image storage such as `.codex_remote/images` to ensure they are not committed and only visible to the user.
+- You may use a .gitignored path for image storage such as `.field_exec/images` to ensure they are not committed and only visible to the user.
 - If you did not produce any images, return `images` as an empty array (`[]`).
 - If you need a user decision, return `actions` as button options:
   - Each action has `id`, `label`, and `value`.

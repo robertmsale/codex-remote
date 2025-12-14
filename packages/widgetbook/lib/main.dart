@@ -9,11 +9,11 @@ import 'package:uuid/uuid.dart';
 import 'package:widgetbook/widgetbook.dart';
 
 void main() {
-  runApp(const CodexRemoteWidgetbookApp());
+  runApp(const FieldExecWidgetbookApp());
 }
 
-class CodexRemoteWidgetbookApp extends StatelessWidget {
-  const CodexRemoteWidgetbookApp({super.key});
+class FieldExecWidgetbookApp extends StatelessWidget {
+  const FieldExecWidgetbookApp({super.key});
 
   @override
   Widget build(BuildContext context) {
@@ -637,7 +637,7 @@ class MockSessionController extends SessionControllerBase {
       event('stderr', 'warning: using fallback shell', at: t5),
       event(
         'tail_stderr',
-        'tail: .codex_remote/sessions/tab-1.log: file truncated',
+        'tail: .field_exec/sessions/tab-1.log: file truncated',
         at: t5.add(const Duration(seconds: 10)),
       ),
 

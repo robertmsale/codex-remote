@@ -20,7 +20,7 @@ import workmanager_apple
 
     // Periodic background refresh (frequency in seconds; scheduling is best-effort).
     WorkmanagerPlugin.registerPeriodicTask(
-      withIdentifier: "com.openai.codexremote.iOSBackgroundAppRefresh",
+      withIdentifier: "com.robertsale.fieldexec.iOSBackgroundAppRefresh",
       frequency: NSNumber(value: 20 * 60)
     )
     return super.application(application, didFinishLaunchingWithOptions: launchOptions)

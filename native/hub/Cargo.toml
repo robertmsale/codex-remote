@@ -20,8 +20,8 @@ wildcard_imports = "deny"
 rinf = "8.8.1"
 serde = { version = "1.0.219", features = ["derive"] }
 tokio = { version = "1.45.0", features = ["rt", "macros", "time"] }
-codex_remote_api = { path = "../codex_remote_api" }
-codex_remote_runtime = { path = "../../rust/codex_remote_runtime" }
+field_exec_api = { path = "../field_exec_api" }
+field_exec_runtime = { path = "../../rust/field_exec_runtime" }
 
 # Uncomment below to target the web.
 # tokio_with_wasm = { version = "0.8.5", features = ["rt", "macros", "time"] }

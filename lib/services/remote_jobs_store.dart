@@ -81,7 +81,7 @@ class RemoteJobRecord {
 }
 
 class RemoteJobsStore {
-  static const _jobsKey = 'codex_remote_active_jobs_v1';
+  static const _jobsKey = 'field_exec_active_jobs_v1';
 
   Future<List<RemoteJobRecord>> loadAll() async {
     final prefs = await SharedPreferences.getInstance();
@@ -131,4 +131,3 @@ class RemoteJobsStore {
     );
   }
 }
-

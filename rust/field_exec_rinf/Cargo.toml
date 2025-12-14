@@ -1,5 +1,5 @@
 [package]
-name = "codex_remote_rinf"
+name = "field_exec_rinf"
 version = "0.1.0"
 edition = "2024"
 
@@ -9,6 +9,6 @@ expect_used = "deny"
 wildcard_imports = "deny"
 
 [dependencies]
-codex_remote_api = { path = "../../native/codex_remote_api" }
+field_exec_api = { path = "../../native/field_exec_api" }
 rinf = "8.8.1"
 tokio = { version = "1.45.0", features = ["rt", "sync", "time"] }

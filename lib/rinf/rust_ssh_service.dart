@@ -315,7 +315,7 @@ class RustSshService {
     return c.future;
   }
 
-  static Future<String> generateEd25519PrivateKeyPem({String comment = 'codex-remote'}) {
+  static Future<String> generateEd25519PrivateKeyPem({String comment = 'field-exec'}) {
     start();
     final requestId = _newRequestId();
     final c = Completer<String>();
@@ -327,7 +327,7 @@ class RustSshService {
   static Future<String> toAuthorizedKeysLine({
     required String privateKeyPem,
     String? privateKeyPassphrase,
-    String comment = 'codex-remote',
+    String comment = 'field-exec',
   }) {
     start();
     final requestId = _newRequestId();
@@ -351,7 +351,7 @@ class RustSshService {
     required String password,
     required String privateKeyPem,
     String? privateKeyPassphrase,
-    String comment = 'codex-remote',
+    String comment = 'field-exec',
   }) {
     start();
     final requestId = _newRequestId();

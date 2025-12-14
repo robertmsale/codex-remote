@@ -13,7 +13,7 @@ class ConnectionPage extends GetView<ConnectionControllerBase> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Codex Remote'),
+        title: const Text('FieldExec'),
         actions: [
           IconButton(
             tooltip: 'Settings',
@@ -156,4 +156,3 @@ class ConnectionPage extends GetView<ConnectionControllerBase> {
     );
   }
 }
-

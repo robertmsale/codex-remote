@@ -4,14 +4,14 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:workmanager/workmanager.dart';
 
-import '../background/codex_remote_workmanager.dart';
+import '../background/field_exec_workmanager.dart';
 
 class BackgroundWorkService {
   Future<void> init() async {
     if (!Platform.isIOS) return;
 
     try {
-      await Workmanager().initialize(codexRemoteCallbackDispatcher);
+      await Workmanager().initialize(fieldExecCallbackDispatcher);
     } on MissingPluginException {
       return;
     } catch (_) {
@@ -21,8 +21,8 @@ class BackgroundWorkService {
 
     try {
       await Workmanager().registerPeriodicTask(
-        codexRemoteBackgroundRefreshTaskId,
-        codexRemoteBackgroundRefreshTaskId,
+        fieldExecBackgroundRefreshTaskId,
+        fieldExecBackgroundRefreshTaskId,
         existingWorkPolicy: ExistingPeriodicWorkPolicy.update,
       );
       if (kDebugMode) {
@@ -35,4 +35,3 @@ class BackgroundWorkService {
     }
   }
 }
-
