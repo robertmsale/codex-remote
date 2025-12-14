@@ -15,11 +15,14 @@ class CodexChatView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final theme = ChatTheme.fromThemeData(Theme.of(context));
     return Chat(
       chatController: controller.chatController,
       currentUserId: 'user',
       resolveUser: controller.resolveUser,
       onMessageSend: controller.sendText,
+      theme: theme,
+      backgroundColor: theme.colors.surface,
       builders: Builders(
         chatAnimatedListBuilder: (context, itemBuilder) {
           return ChatAnimatedList(

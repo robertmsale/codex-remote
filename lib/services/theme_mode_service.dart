@@ -3,7 +3,7 @@ import 'package:get/get.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 class ThemeModeService {
-  static const _key = 'codex_theme_mode_v1';
+  static const _key = 'field_exec_theme_mode_v1';
 
   final modeRx = ThemeMode.system.obs;
 

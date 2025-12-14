@@ -9,23 +9,6 @@ import '../services/theme_mode_service.dart';
 class FieldExecApp extends StatelessWidget {
   const FieldExecApp({super.key});
 
-  ThemeData _lightTheme() {
-    return ThemeData(
-      useMaterial3: true,
-      colorScheme: ColorScheme.fromSeed(seedColor: Colors.blue),
-    );
-  }
-
-  ThemeData _darkTheme() {
-    return ThemeData(
-      useMaterial3: true,
-      colorScheme: ColorScheme.fromSeed(
-        seedColor: Colors.blue,
-        brightness: Brightness.dark,
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     final service = Get.isRegistered<ThemeModeService>()
@@ -36,8 +19,8 @@ class FieldExecApp extends StatelessWidget {
       return GetMaterialApp(
         title: 'FieldExec',
         debugShowCheckedModeBanner: false,
-        theme: _lightTheme(),
-        darkTheme: _darkTheme(),
+        theme: DesignSystemThemes.light(),
+        darkTheme: DesignSystemThemes.dark(),
         themeMode: ThemeMode.system,
         initialBinding: InitialBinding(),
         initialRoute: DesignRoutes.connect,
@@ -49,8 +32,8 @@ class FieldExecApp extends StatelessWidget {
       () => GetMaterialApp(
         title: 'FieldExec',
         debugShowCheckedModeBanner: false,
-        theme: _lightTheme(),
-        darkTheme: _darkTheme(),
+        theme: DesignSystemThemes.light(),
+        darkTheme: DesignSystemThemes.dark(),
         themeMode: service.modeRx.value,
         initialBinding: InitialBinding(),
         initialRoute: DesignRoutes.connect,

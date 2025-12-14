@@ -27,6 +27,12 @@ class FieldExecWidgetbookApp extends StatelessWidget {
           WindowsViewports.desktop,
           LinuxViewports.desktop,
         ]),
+        MaterialThemeAddon(
+          themes: [
+            WidgetbookTheme(name: 'Light', data: DesignSystemThemes.light()),
+            WidgetbookTheme(name: 'Dark', data: DesignSystemThemes.dark()),
+          ],
+        ),
       ],
       directories: [
         WidgetbookCategory(
@@ -124,11 +130,11 @@ class FieldExecWidgetbookApp extends StatelessWidget {
         ),
       ],
       appBuilder: (context, child) {
+        final theme = Theme.of(context);
         return GetMaterialApp(
           debugShowCheckedModeBanner: false,
-          theme: ThemeData(
-            colorScheme: ColorScheme.fromSeed(seedColor: Colors.blue),
-          ),
+          theme: theme,
+          themeMode: ThemeMode.light,
           initialBinding: WidgetbookBinding(),
           getPages: [
             GetPage(name: DesignRoutes.connect, page: ConnectionPage.new),

@@ -1,20 +1,26 @@
 PODS:
   - Flutter (1.0.0)
+  - rinf (0.1.0):
+    - Flutter
   - workmanager_apple (0.0.1):
     - Flutter
 
 DEPENDENCIES:
   - Flutter (from `Flutter`)
+  - rinf (from `.symlinks/plugins/rinf/ios`)
   - workmanager_apple (from `.symlinks/plugins/workmanager_apple/ios`)
 
 EXTERNAL SOURCES:
   Flutter:
     :path: Flutter
+  rinf:
+    :path: ".symlinks/plugins/rinf/ios"
   workmanager_apple:
     :path: ".symlinks/plugins/workmanager_apple/ios"
 
 SPEC CHECKSUMS:
   Flutter: cabc95a1d2626b1b06e7179b784ebcf0c0cde467
+  rinf: eb4e6ae98422d1bb1decaf85be968eded2222a9c
   workmanager_apple: 7bac258335c310689a641e2d66e88d4845d372e9
 
 PODFILE CHECKSUM: e30f02f9d1c72c47bb6344a0a748c9d268180865
