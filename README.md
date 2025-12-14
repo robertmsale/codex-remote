@@ -1,6 +1,8 @@
 # FieldExec
 
-FieldExec is a Flutter app (iOS + macOS) that lets you run Codex CLI “sessions” on your Mac—either **over SSH** (from iOS or macOS) or **locally** (macOS).
+![FieldExec logo](assets/logo.png)
+
+FieldExec is a Flutter app (iOS + Android + macOS) that lets you run Codex CLI “sessions” on your Mac—either **over SSH** (from iOS, Android, or macOS) or **locally** (macOS).
 
 It’s designed for concurrency: you can keep multiple projects and multiple sessions running at once, switch between them, and resume past conversations by thread ID.
 
@@ -8,7 +10,7 @@ It’s designed for concurrency: you can keep multiple projects and multiple ses
 
 ## Features
 
-- **Remote mode (iOS + macOS)**: connect to `username@host` over SSH and run `codex exec`.
+- **Remote mode (iOS + Android + macOS)**: connect to `username@host` over SSH and run `codex exec`.
 - **Local mode (macOS)**: run `codex` directly via local shell execution.
 - **Projects**: save remote/local working directories as “projects”.
 - **Tabs per project**: multiple concurrent agent sessions per project.
@@ -18,7 +20,7 @@ It’s designed for concurrency: you can keep multiple projects and multiple ses
   - If `tmux` is available on the remote host, sessions run detached in `tmux`.
   - Otherwise it falls back to `nohup` and tracks the process PID.
 - **Stop button**: stops the current remote job (kills tmux session or PID) or local process.
-- **Key-based SSH**: store a single global private key in Apple Keychain.
+- **Key-based SSH**: store a single global private key in secure storage (Keychain / Android Keystore).
 - **Password is never stored**: password is only used as a setup/bootstrapping path to get keys installed.
 - **Optional auto-commit**: if the final structured response includes a non-empty `commit_message`, the app runs `git add -A && git commit -m "<commit_message>"` (only if there are changes).
 
@@ -35,12 +37,21 @@ On macOS local mode, the app runs `codex` locally and streams stdout/stderr into
 
 ## Requirements
 
-- Flutter SDK + Xcode (for iOS and macOS builds).
+- Flutter SDK (+ Xcode for iOS/macOS builds, Android SDK for Android builds).
 - Codex CLI installed on the Mac that will run Codex:
   - Local mode: installed on the same Mac running the app.
   - Remote mode: installed on the remote Mac host reachable via SSH.
 - SSH server enabled on the remote Mac (System Settings → Sharing → Remote Login).
 - Optional (recommended): `tmux` installed on the remote host for the best “keep running while disconnected” behavior.
+
+## Quick Start
+
+```bash
+flutter pub get
+rinf gen
+flutter devices
+flutter run -d <DEVICE_ID>
+```
 
 ## Setup
 
@@ -48,6 +59,12 @@ Install dependencies:
 
 ```bash
 flutter pub get
+```
+
+Generate Dart bindings from Rust signals:
+
+```bash
+rinf gen
 ```
 
 Install the Rinf CLI (required for `rinf gen` and the pre-commit hook):
@@ -173,3 +190,7 @@ flutter run
 
 For detailed instructions on writing Rust and Flutter together,
 please refer to Rinf's [documentation](https://rinf.cunarist.org).
+
+## Disclaimer
+
+Codex is a trademark of OpenAI. This project is not affiliated with, endorsed by, or sponsored by OpenAI.
