@@ -4,19 +4,58 @@ import 'package:design_system/design_system.dart';
 
 import 'bindings/initial_binding.dart';
 import 'routes/app_pages.dart';
+import '../services/theme_mode_service.dart';
 
 class CodexRemoteApp extends StatelessWidget {
   const CodexRemoteApp({super.key});
 
+  ThemeData _lightTheme() {
+    return ThemeData(
+      useMaterial3: true,
+      colorScheme: ColorScheme.fromSeed(seedColor: Colors.blue),
+    );
+  }
+
+  ThemeData _darkTheme() {
+    return ThemeData(
+      useMaterial3: true,
+      colorScheme: ColorScheme.fromSeed(
+        seedColor: Colors.blue,
+        brightness: Brightness.dark,
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    return GetMaterialApp(
-      title: 'Codex Remote',
-      debugShowCheckedModeBanner: false,
-      theme: ThemeData(colorScheme: ColorScheme.fromSeed(seedColor: Colors.blue)),
-      initialBinding: InitialBinding(),
-      initialRoute: DesignRoutes.connect,
-      getPages: AppPages.pages,
+    final service = Get.isRegistered<ThemeModeService>()
+        ? Get.find<ThemeModeService>()
+        : null;
+
+    if (service == null) {
+      return GetMaterialApp(
+        title: 'Codex Remote',
+        debugShowCheckedModeBanner: false,
+        theme: _lightTheme(),
+        darkTheme: _darkTheme(),
+        themeMode: ThemeMode.system,
+        initialBinding: InitialBinding(),
+        initialRoute: DesignRoutes.connect,
+        getPages: AppPages.pages,
+      );
+    }
+
+    return Obx(
+      () => GetMaterialApp(
+        title: 'Codex Remote',
+        debugShowCheckedModeBanner: false,
+        theme: _lightTheme(),
+        darkTheme: _darkTheme(),
+        themeMode: service.modeRx.value,
+        initialBinding: InitialBinding(),
+        initialRoute: DesignRoutes.connect,
+        getPages: AppPages.pages,
+      ),
     );
   }
 }

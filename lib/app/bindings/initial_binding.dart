@@ -2,6 +2,7 @@ import 'package:get/get.dart';
 import 'package:design_system/design_system.dart';
 
 import '../../features/connection/connection_controller.dart';
+import '../../features/settings/settings_controller.dart';
 import '../../features/settings/keys/keys_controller.dart';
 import '../../features/settings/keys/install_key_controller.dart';
 import '../../services/connection_history_service.dart';
@@ -24,8 +25,10 @@ class InitialBinding extends Bindings {
     Get.put<SecureStorageService>(SecureStorageService(), permanent: true);
     Get.put<SshService>(SshService(), permanent: true);
     Get.put<SshKeyService>(SshKeyService(), permanent: true);
-    Get.put<ConnectionHistoryService>(ConnectionHistoryService(),
-        permanent: true);
+    Get.put<ConnectionHistoryService>(
+      ConnectionHistoryService(),
+      permanent: true,
+    );
     Get.put<CodexSessionStore>(CodexSessionStore(), permanent: true);
     Get.put<ProjectStore>(ProjectStore(), permanent: true);
     Get.put<ProjectTabsStore>(ProjectTabsStore(), permanent: true);
@@ -34,11 +37,14 @@ class InitialBinding extends Bindings {
     Get.put<NotificationService>(NotificationService(), permanent: true);
     Get.put<RemoteJobsStore>(RemoteJobsStore(), permanent: true);
     Get.put<ActiveSessionService>(ActiveSessionService(), permanent: true);
-    final lifecycle =
-        Get.put<AppLifecycleService>(AppLifecycleService(), permanent: true);
+    final lifecycle = Get.put<AppLifecycleService>(
+      AppLifecycleService(),
+      permanent: true,
+    );
     lifecycle.start();
 
     Get.lazyPut<ConnectionControllerBase>(() => ConnectionController());
+    Get.lazyPut<SettingsControllerBase>(() => SettingsController());
     Get.lazyPut<KeysControllerBase>(() => KeysController());
     Get.lazyPut<InstallKeyControllerBase>(() => InstallKeyController());
   }

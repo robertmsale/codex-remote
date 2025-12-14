@@ -59,7 +59,10 @@ class CodexRemoteWidgetbookApp extends StatelessWidget {
                   builder: (context) {
                     _putProjects(
                       target: TargetArgs.remote(
-                        ConnectionProfile(userAtHost: 'robert@mac.local', port: 22),
+                        ConnectionProfile(
+                          userAtHost: 'robert@mac.local',
+                          port: 22,
+                        ),
                       ),
                     );
                     return const ProjectsPage();
@@ -87,6 +90,7 @@ class CodexRemoteWidgetbookApp extends StatelessWidget {
                   builder: (context) {
                     _putKeys();
                     _putInstallKey();
+                    _putSettings();
                     return const SettingsPage();
                   },
                 ),
@@ -122,7 +126,9 @@ class CodexRemoteWidgetbookApp extends StatelessWidget {
       appBuilder: (context, child) {
         return GetMaterialApp(
           debugShowCheckedModeBanner: false,
-          theme: ThemeData(colorScheme: ColorScheme.fromSeed(seedColor: Colors.blue)),
+          theme: ThemeData(
+            colorScheme: ColorScheme.fromSeed(seedColor: Colors.blue),
+          ),
           initialBinding: WidgetbookBinding(),
           getPages: [
             GetPage(name: DesignRoutes.connect, page: ConnectionPage.new),
@@ -156,8 +162,15 @@ class CodexRemoteWidgetbookApp extends StatelessWidget {
 }
 
 const _demoTarget = TargetArgs.local();
-const _demoProject = Project(id: 'demo', path: '/Users/me/demo-repo', name: 'demo-repo');
-const _demoProjectArgs = ProjectArgs(target: _demoTarget, project: _demoProject);
+const _demoProject = Project(
+  id: 'demo',
+  path: '/Users/me/demo-repo',
+  name: 'demo-repo',
+);
+const _demoProjectArgs = ProjectArgs(
+  target: _demoTarget,
+  project: _demoProject,
+);
 
 void _putConnection() {
   if (Get.isRegistered<ConnectionControllerBase>()) {
@@ -177,7 +190,9 @@ void _putProjectSessions({required ProjectArgs args}) {
   if (Get.isRegistered<ProjectSessionsControllerBase>()) {
     Get.delete<ProjectSessionsControllerBase>(force: true);
   }
-  Get.put<ProjectSessionsControllerBase>(MockProjectSessionsController(args: args));
+  Get.put<ProjectSessionsControllerBase>(
+    MockProjectSessionsController(args: args),
+  );
 }
 
 void _putKeys() {
@@ -194,18 +209,38 @@ void _putInstallKey() {
   Get.put<InstallKeyControllerBase>(MockInstallKeyController());
 }
 
+void _putSettings() {
+  if (Get.isRegistered<SettingsControllerBase>()) {
+    Get.delete<SettingsControllerBase>(force: true);
+  }
+  Get.put<SettingsControllerBase>(MockSettingsController());
+}
+
 class WidgetbookBinding extends Bindings {
   @override
   void dependencies() {
     Get.lazyPut<ConnectionControllerBase>(() => MockConnectionController());
     Get.lazyPut<KeysControllerBase>(() => MockKeysController());
     Get.lazyPut<InstallKeyControllerBase>(() => MockInstallKeyController());
+    Get.lazyPut<SettingsControllerBase>(() => MockSettingsController());
 
     // Defaults for pages that might be opened via navigation buttons.
-    Get.lazyPut<ProjectsControllerBase>(() => MockProjectsController(target: _demoTarget));
+    Get.lazyPut<ProjectsControllerBase>(
+      () => MockProjectsController(target: _demoTarget),
+    );
     Get.lazyPut<ProjectSessionsControllerBase>(
       () => MockProjectSessionsController(args: _demoProjectArgs),
     );
+  }
+}
+
+class MockSettingsController extends SettingsControllerBase {
+  @override
+  final themeMode = ThemeMode.system.obs;
+
+  @override
+  Future<void> setThemeMode(ThemeMode mode) async {
+    themeMode.value = mode;
   }
 }
 
@@ -267,7 +302,9 @@ class MockConnectionController extends ConnectionControllerBase {
 
     Get.toNamed(
       DesignRoutes.projects,
-      arguments: TargetArgs.remote(ConnectionProfile(userAtHost: userAtHost, port: port)),
+      arguments: TargetArgs.remote(
+        ConnectionProfile(userAtHost: userAtHost, port: port),
+      ),
     );
   }
 }
@@ -353,7 +390,10 @@ class MockProjectSessionsController extends ProjectSessionsControllerBase {
     final tab = ProjectTab(id: id, title: 'Tab ${tabs.length + 1}');
     tabs.add(tab);
     activeIndex.value = tabs.length - 1;
-    _sessionsByTabId[id] = MockSessionController(projectName: args.project.name, seed: false);
+    _sessionsByTabId[id] = MockSessionController(
+      projectName: args.project.name,
+      seed: false,
+    );
   }
 
   @override
@@ -408,7 +448,11 @@ class MockProjectSessionsController extends ProjectSessionsControllerBase {
   @override
   Future<RunCommandResult> runShellCommand(String command) async {
     await Future<void>.delayed(const Duration(milliseconds: 250));
-    return RunCommandResult(exitCode: 0, stdout: 'mock: $command\n', stderr: '');
+    return RunCommandResult(
+      exitCode: 0,
+      stdout: 'mock: $command\n',
+      stderr: '',
+    );
   }
 }
 
@@ -460,11 +504,7 @@ class MockSessionController extends SessionControllerBase {
         id: _uuid.v4(),
         authorId: _system,
         createdAt: at ?? now,
-        metadata: {
-          'kind': 'codex_event',
-          'eventType': type,
-          'text': text,
-        },
+        metadata: {'kind': 'codex_event', 'eventType': type, 'text': text},
       );
     }
 
@@ -494,10 +534,7 @@ class MockSessionController extends SessionControllerBase {
         id: _uuid.v4(),
         authorId: _codex,
         createdAt: at ?? now,
-        metadata: {
-          'kind': 'codex_actions',
-          'actions': actions,
-        },
+        metadata: {'kind': 'codex_actions', 'actions': actions},
       );
     }
 
@@ -509,146 +546,156 @@ class MockSessionController extends SessionControllerBase {
     final t5 = now.subtract(const Duration(minutes: 1, seconds: 30));
     final t6 = now.subtract(const Duration(seconds: 45));
 
-    chatController.setMessages(
-      [
-        event('replay', 'Replayed last 42 log lines.', at: t0.add(const Duration(seconds: 2))),
-        Message.text(
-          id: _uuid.v4(),
-          authorId: _me,
-          createdAt: t1,
-          text: 'Please add a stop button that works across app restarts.',
-        ),
-        // Codex exec JSONL-style items (started/updated/completed). We intentionally
-        // seed some item.started events to verify they are not shown as bubbles.
-        item(
-          'item.started',
-          'command_execution',
-          '',
-          item: const {
-            'id': 'item_1',
-            'type': 'command_execution',
-            'command': 'bash -lc ls',
-            'status': 'in_progress',
-          },
-          at: t2,
-        ),
-        item(
-          'item.completed',
-          'command_execution',
-          '',
-          item: const {
-            'id': 'item_1',
-            'type': 'command_execution',
-            'command': 'bash -lc ls',
-            'aggregated_output': 'README.md\\nlib\\npackages\\n',
-            'exit_code': 0,
-            'status': 'completed',
-          },
-          at: t2.add(const Duration(seconds: 10)),
-        ),
+    chatController.setMessages([
+      event(
+        'replay',
+        'Replayed last 42 log lines.',
+        at: t0.add(const Duration(seconds: 2)),
+      ),
+      Message.text(
+        id: _uuid.v4(),
+        authorId: _me,
+        createdAt: t1,
+        text: 'Please add a stop button that works across app restarts.',
+      ),
+      // Codex exec JSONL-style items (started/updated/completed). We intentionally
+      // seed some item.started events to verify they are not shown as bubbles.
+      item(
+        'item.started',
+        'command_execution',
+        '',
+        item: const {
+          'id': 'item_1',
+          'type': 'command_execution',
+          'command': 'bash -lc ls',
+          'status': 'in_progress',
+        },
+        at: t2,
+      ),
+      item(
+        'item.completed',
+        'command_execution',
+        '',
+        item: const {
+          'id': 'item_1',
+          'type': 'command_execution',
+          'command': 'bash -lc ls',
+          'aggregated_output': 'README.md\\nlib\\npackages\\n',
+          'exit_code': 0,
+          'status': 'completed',
+        },
+        at: t2.add(const Duration(seconds: 10)),
+      ),
 
-        item(
-          'item.completed',
-          'reasoning',
-          'We need to persist the running state and reconnect to the tail stream.',
-          item: const {'text': 'We need to persist the running state...'},
-          at: t3.add(const Duration(seconds: 10)),
-        ),
-        item(
-          'item.completed',
-          'todo_list',
-          '',
-          item: const {
-            'id': 'item_20',
-            'type': 'todo_list',
-            'items': [
-              {'text': 'Migrate Sales pages', 'completed': true},
-              {'text': 'Update plan progress doc', 'completed': true},
-              {'text': 'Run tests and quick pipeline', 'completed': true},
-            ],
-          },
-          at: t3.add(const Duration(seconds: 20)),
-        ),
-        item(
-          'item.completed',
-          'file_change',
-          'Modified lib/features/session/session_controller.dart',
-          item: const {
-            'path': 'lib/features/session/session_controller.dart',
-            'summary': 'Improve reattach + stop behavior',
-          },
-          at: t4.add(const Duration(seconds: 10)),
-        ),
-        item(
-          'item.completed',
-          'web_search',
-          'Searched: getx permanent controller keep alive',
-          item: const {'query': 'getx permanent controller keep alive'},
-          at: t4.add(const Duration(seconds: 20)),
-        ),
-        item(
-          'item.completed',
-          'mcp_tool_call',
-          'context7: getx dependency management docs',
-          item: const {'tool': 'context7', 'topic': 'Get.put permanent'},
-          at: t4.add(const Duration(seconds: 30)),
-        ),
-
-        event('stderr', 'warning: using fallback shell', at: t5),
-        event(
-          'tail_stderr',
-          'tail: .codex_remote/sessions/tab-1.log: file truncated',
-          at: t5.add(const Duration(seconds: 10)),
-        ),
-
-        Message.text(
-          id: _uuid.v4(),
-          authorId: _codex,
-          createdAt: t6.add(const Duration(seconds: 1)),
-          text: 'Done. The stop button now reflects active jobs across restarts.',
-        ),
-        Message.custom(
-          id: _uuid.v4(),
-          authorId: _codex,
-          createdAt: t6.add(const Duration(seconds: 1, milliseconds: 200)),
-          metadata: {
-            'kind': 'codex_image_grid',
-            'images': [
-              {
-                'path': _mockScreenshotAssetKey,
-                'caption': 'Golden diff A (mock)',
-                'status': 'tap_to_load',
-              },
-              {
-                'path': _mockScreenshotAssetKey,
-                'caption': 'Golden diff B (mock)',
-                'status': 'tap_to_load',
-              },
-              {
-                'path': _mockScreenshotAssetKey,
-                'caption': 'Golden diff C (mock)',
-                'status': 'tap_to_load',
-              },
-              {
-                'path': _mockScreenshotAssetKey,
-                'caption': 'Golden diff D (mock)',
-                'status': 'tap_to_load',
-              },
-            ],
-          },
-        ),
-        event('commit_message', 'Fix session reattach stop button', at: t6.add(const Duration(seconds: 2))),
-        actions(
-          const [
-            {'id': 'run_tests', 'label': 'Run tests', 'value': 'Please run the test suite.'},
-            {'id': 'open_pr', 'label': 'Open PR', 'value': 'Create a PR for these changes.'},
-            {'id': 'ship', 'label': 'Ship', 'value': 'Looks good—ship it.'},
+      item(
+        'item.completed',
+        'reasoning',
+        'We need to persist the running state and reconnect to the tail stream.',
+        item: const {'text': 'We need to persist the running state...'},
+        at: t3.add(const Duration(seconds: 10)),
+      ),
+      item(
+        'item.completed',
+        'todo_list',
+        '',
+        item: const {
+          'id': 'item_20',
+          'type': 'todo_list',
+          'items': [
+            {'text': 'Migrate Sales pages', 'completed': true},
+            {'text': 'Update plan progress doc', 'completed': true},
+            {'text': 'Run tests and quick pipeline', 'completed': true},
           ],
-          at: t6.add(const Duration(seconds: 3)),
-        ),
-      ],
-      animated: false,
-    );
+        },
+        at: t3.add(const Duration(seconds: 20)),
+      ),
+      item(
+        'item.completed',
+        'file_change',
+        'Modified lib/features/session/session_controller.dart',
+        item: const {
+          'path': 'lib/features/session/session_controller.dart',
+          'summary': 'Improve reattach + stop behavior',
+        },
+        at: t4.add(const Duration(seconds: 10)),
+      ),
+      item(
+        'item.completed',
+        'web_search',
+        'Searched: getx permanent controller keep alive',
+        item: const {'query': 'getx permanent controller keep alive'},
+        at: t4.add(const Duration(seconds: 20)),
+      ),
+      item(
+        'item.completed',
+        'mcp_tool_call',
+        'context7: getx dependency management docs',
+        item: const {'tool': 'context7', 'topic': 'Get.put permanent'},
+        at: t4.add(const Duration(seconds: 30)),
+      ),
+
+      event('stderr', 'warning: using fallback shell', at: t5),
+      event(
+        'tail_stderr',
+        'tail: .codex_remote/sessions/tab-1.log: file truncated',
+        at: t5.add(const Duration(seconds: 10)),
+      ),
+
+      Message.text(
+        id: _uuid.v4(),
+        authorId: _codex,
+        createdAt: t6.add(const Duration(seconds: 1)),
+        text: 'Done. The stop button now reflects active jobs across restarts.',
+      ),
+      Message.custom(
+        id: _uuid.v4(),
+        authorId: _codex,
+        createdAt: t6.add(const Duration(seconds: 1, milliseconds: 200)),
+        metadata: {
+          'kind': 'codex_image_grid',
+          'images': [
+            {
+              'path': _mockScreenshotAssetKey,
+              'caption': 'Golden diff A (mock)',
+              'status': 'tap_to_load',
+            },
+            {
+              'path': _mockScreenshotAssetKey,
+              'caption': 'Golden diff B (mock)',
+              'status': 'tap_to_load',
+            },
+            {
+              'path': _mockScreenshotAssetKey,
+              'caption': 'Golden diff C (mock)',
+              'status': 'tap_to_load',
+            },
+            {
+              'path': _mockScreenshotAssetKey,
+              'caption': 'Golden diff D (mock)',
+              'status': 'tap_to_load',
+            },
+          ],
+        },
+      ),
+      event(
+        'commit_message',
+        'Fix session reattach stop button',
+        at: t6.add(const Duration(seconds: 2)),
+      ),
+      actions(const [
+        {
+          'id': 'run_tests',
+          'label': 'Run tests',
+          'value': 'Please run the test suite.',
+        },
+        {
+          'id': 'open_pr',
+          'label': 'Open PR',
+          'value': 'Create a PR for these changes.',
+        },
+        {'id': 'ship', 'label': 'Ship', 'value': 'Looks good—ship it.'},
+      ], at: t6.add(const Duration(seconds: 3))),
+    ], animated: false);
   }
 
   @override
@@ -705,13 +752,19 @@ class MockSessionController extends SessionControllerBase {
       final next = Map<String, Object?>.from(meta);
       next['status'] = 'loaded';
       next['bytes'] = bytes;
-      await chatController.updateMessage(message, message.copyWith(metadata: next));
+      await chatController.updateMessage(
+        message,
+        message.copyWith(metadata: next),
+      );
       return;
     }
 
     final raw = meta['images'];
     if (raw is! List) return;
-    final items = raw.whereType<Map>().map((m) => Map<String, Object?>.from(m)).toList();
+    final items = raw
+        .whereType<Map>()
+        .map((m) => Map<String, Object?>.from(m))
+        .toList();
     if (items.isEmpty) return;
 
     final indices = <int>[];
@@ -733,13 +786,18 @@ class MockSessionController extends SessionControllerBase {
 
     final next = Map<String, Object?>.from(meta);
     next['images'] = items;
-    await chatController.updateMessage(message, message.copyWith(metadata: next));
+    await chatController.updateMessage(
+      message,
+      message.copyWith(metadata: next),
+    );
   }
 
   Future<Uint8List> _readMockScreenshotBytes() async {
     try {
       final data = await rootBundle.load(_mockScreenshotAssetKey);
-      return Uint8List.fromList(data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes));
+      return Uint8List.fromList(
+        data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes),
+      );
     } catch (_) {}
     final fallback = base64.decode(
       'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO9l9WQAAAAASUVORK5CYII=',

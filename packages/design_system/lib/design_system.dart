@@ -12,6 +12,7 @@ export 'src/controllers/project_sessions_controller_base.dart';
 export 'src/controllers/session_controller_base.dart';
 export 'src/controllers/keys_controller_base.dart';
 export 'src/controllers/install_key_controller_base.dart';
+export 'src/controllers/settings_controller_base.dart';
 
 export 'src/routes/design_routes.dart';
 
