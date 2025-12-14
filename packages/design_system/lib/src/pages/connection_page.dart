@@ -138,7 +138,7 @@ class ConnectionPage extends GetView<ConnectionControllerBase> {
                   controller.isBusy.value
                       ? 'Working...'
                       : (controller.useLocalRunner.value
-                          ? 'Test Local Codex'
+                          ? 'Connect Locally'
                           : 'Connect'),
                 ),
               ),

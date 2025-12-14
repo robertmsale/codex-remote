@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_chat_core/flutter_chat_core.dart';
 import 'package:flutter_chat_ui/flutter_chat_ui.dart';
@@ -47,6 +49,10 @@ class CodexChatView extends StatelessWidget {
         }) {
           final meta = message.metadata ?? const {};
           final kind = meta['kind']?.toString();
+
+          if (kind == 'codex_image') {
+            return _CodexImageBubble(controller: controller, message: message);
+          }
 
           if (kind == 'codex_actions') {
             final actions = (meta['actions'] as List?) ?? const [];
@@ -369,6 +375,233 @@ class _CodexTodoListBubble extends StatelessWidget {
               Text(fallbackText),
             ],
           ],
+        ),
+      ),
+    );
+  }
+}
+
+class _CodexImageBubble extends StatelessWidget {
+  final SessionControllerBase controller;
+  final CustomMessage message;
+
+  const _CodexImageBubble({required this.controller, required this.message});
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final meta = message.metadata ?? const {};
+    final path = meta['path']?.toString() ?? '';
+    final caption = meta['caption']?.toString() ?? '';
+    final status = meta['status']?.toString() ?? 'tap_to_load';
+    final error = meta['error']?.toString() ?? '';
+    final bytes = meta['bytes'];
+    final Uint8List? imgBytes = bytes is Uint8List ? bytes : null;
+    final loaded = imgBytes?.isNotEmpty ?? false;
+    final loading = status == 'loading' && !loaded;
+    final hasError = status == 'error';
+
+    final bg = cs.surfaceContainerHigh;
+    final fg = cs.onSurface;
+
+    Future<void> onTap() async {
+      if (loaded) {
+        final bytes = imgBytes;
+        if (bytes == null) return;
+        await showDialog<void>(
+          context: context,
+          barrierColor: Colors.black.withValues(alpha: 0.92),
+          builder: (context) {
+            return Dialog(
+              insetPadding: EdgeInsets.zero,
+              backgroundColor: Colors.transparent,
+              child: Stack(
+                children: [
+                  Positioned.fill(
+                    child: GestureDetector(
+                      onTap: () => Navigator.of(context).pop(),
+                      child: InteractiveViewer(
+                        minScale: 0.5,
+                        maxScale: 6,
+                        child: Center(
+                          child: Image.memory(bytes, fit: BoxFit.contain),
+                        ),
+                      ),
+                    ),
+                  ),
+                  Positioned(
+                    top: 24,
+                    right: 24,
+                    child: IconButton.filledTonal(
+                      onPressed: () => Navigator.of(context).pop(),
+                      icon: const Icon(Icons.close),
+                    ),
+                  ),
+                  if (caption.trim().isNotEmpty)
+                    Positioned(
+                      left: 24,
+                      right: 24,
+                      bottom: 24,
+                      child: Material(
+                        color: Colors.black.withValues(alpha: 0.35),
+                        borderRadius: BorderRadius.circular(12),
+                        child: Padding(
+                          padding: const EdgeInsets.all(12),
+                          child: Text(
+                            caption,
+                            style: Theme.of(context)
+                                .textTheme
+                                .bodyMedium
+                                ?.copyWith(color: Colors.white),
+                            textAlign: TextAlign.center,
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            );
+          },
+        );
+        return;
+      }
+      await controller.loadImageAttachment(message);
+    }
+
+    final title = path.isEmpty
+        ? 'Image'
+        : (path.split('/').last.isEmpty ? 'Image' : path.split('/').last);
+
+    Widget body;
+    if (loaded) {
+      final bytes = imgBytes;
+      if (bytes == null) return const SizedBox.shrink();
+      body = ClipRRect(
+        borderRadius: BorderRadius.circular(10),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxHeight: 260),
+          child: Image.memory(bytes, fit: BoxFit.contain),
+        ),
+      );
+    } else if (hasError) {
+      body = Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: cs.errorContainer,
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(Icons.broken_image_outlined, size: 18, color: cs.onErrorContainer),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                error.trim().isEmpty ? 'Failed to load image.' : error.trim(),
+                style: Theme.of(context)
+                    .textTheme
+                    .bodySmall
+                    ?.copyWith(color: cs.onErrorContainer),
+              ),
+            ),
+            const SizedBox(width: 8),
+            TextButton(
+              onPressed: () => controller.loadImageAttachment(message),
+              child: const Text('Retry'),
+            ),
+          ],
+        ),
+      );
+    } else {
+      body = Container(
+        height: 160,
+        decoration: BoxDecoration(
+          color: cs.surfaceContainerHighest,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: cs.outlineVariant.withValues(alpha: 0.6)),
+        ),
+        child: Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.image_outlined, color: fg.withValues(alpha: 0.7)),
+              const SizedBox(height: 8),
+              Text(
+                loading ? 'Loading…' : 'Tap to load',
+                style: Theme.of(context)
+                    .textTheme
+                    .bodySmall
+                    ?.copyWith(color: fg.withValues(alpha: 0.8)),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: loading ? null : onTap,
+        borderRadius: BorderRadius.circular(12),
+        child: Container(
+          padding: const EdgeInsets.all(10),
+          decoration: BoxDecoration(
+            color: bg,
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: DefaultTextStyle(
+            style: Theme.of(context)
+                    .textTheme
+                    .bodySmall
+                    ?.copyWith(color: fg) ??
+                TextStyle(fontSize: 12, color: fg),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Icon(Icons.image, size: 14, color: fg),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Text(
+                        title,
+                        style: Theme.of(context)
+                            .textTheme
+                            .labelMedium
+                            ?.copyWith(color: fg),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    if (loading) ...[
+                      const SizedBox(width: 8),
+                      SizedBox(
+                        width: 14,
+                        height: 14,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: fg.withValues(alpha: 0.85),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+                const SizedBox(height: 8),
+                body,
+                if (caption.trim().isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  Text(
+                    caption.trim(),
+                    style: Theme.of(context)
+                        .textTheme
+                        .bodySmall
+                        ?.copyWith(color: fg.withValues(alpha: 0.85)),
+                  ),
+                ],
+              ],
+            ),
+          ),
         ),
       ),
     );

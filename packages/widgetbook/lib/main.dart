@@ -1,3 +1,6 @@
+import 'dart:convert';
+import 'dart:typed_data';
+
 import 'package:design_system/design_system.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_chat_core/flutter_chat_core.dart';
@@ -603,6 +606,17 @@ class MockSessionController extends SessionControllerBase {
           createdAt: t6.add(const Duration(seconds: 1)),
           text: 'Done. The stop button now reflects active jobs across restarts.',
         ),
+        Message.custom(
+          id: _uuid.v4(),
+          authorId: _codex,
+          createdAt: t6.add(const Duration(seconds: 1, milliseconds: 200)),
+          metadata: const {
+            'kind': 'codex_image',
+            'path': '/workspace/goldens/failure.png',
+            'caption': 'Golden diff (mock). Tap to load.',
+            'status': 'tap_to_load',
+          },
+        ),
         event('commit_message', 'Fix session reattach stop button', at: t6.add(const Duration(seconds: 2))),
         actions(
           const [
@@ -658,6 +672,19 @@ class MockSessionController extends SessionControllerBase {
 
   @override
   Future<void> sendQuickReply(String value) => sendText(value);
+
+  @override
+  Future<void> loadImageAttachment(CustomMessage message) async {
+    final meta = message.metadata ?? const {};
+    if (meta['kind']?.toString() != 'codex_image') return;
+    final bytes = base64.decode(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO9l9WQAAAAASUVORK5CYII=',
+    );
+    final next = Map<String, Object?>.from(meta);
+    next['status'] = 'loaded';
+    next['bytes'] = Uint8List.fromList(bytes);
+    await chatController.updateMessage(message, message.copyWith(metadata: next));
+  }
 
   @override
   Future<void> resumeThreadById(String id, {String? preview}) async {

@@ -193,7 +193,9 @@ class ProjectSessionsController extends ProjectSessionsControllerBase {
     for (final c in [...stored, ...discovered]) {
       if (c.threadId.isEmpty) continue;
       final prev = map[c.threadId];
-      if (prev == null || c.lastUsedAtMs > prev.lastUsedAtMs) {
+      if (prev == null ||
+          (prev.tabId.isEmpty && c.tabId.isNotEmpty) ||
+          c.lastUsedAtMs > prev.lastUsedAtMs) {
         map[c.threadId] = c;
       }
     }
@@ -203,7 +205,9 @@ class ProjectSessionsController extends ProjectSessionsControllerBase {
   }
 
   Future<List<Conversation>> _discoverConversationsFromLogs() async {
-    if (!args.target.local) return const [];
+    if (!args.target.local) {
+      return _discoverConversationsFromRemoteLogs();
+    }
     if (!Platform.isMacOS) return const [];
 
     final sessionsDir = Directory('${args.project.path}/.codex_remote/sessions');
@@ -241,6 +245,111 @@ class ProjectSessionsController extends ProjectSessionsControllerBase {
         );
       } catch (_) {}
     }
+    return out;
+  }
+
+  Future<List<Conversation>> _discoverConversationsFromRemoteLogs() async {
+    if (args.target.profile == null) return const [];
+
+    // Single remote command to keep SSH overhead low. Emit markers and raw JSONL
+    // so parsing/JSON decoding happens locally (handles proper escaping).
+    const begin = '__CODEX_REMOTE_LOG_BEGIN__';
+    const tail = '__CODEX_REMOTE_LOG_TAIL__';
+    const end = '__CODEX_REMOTE_LOG_END__';
+
+    final script = '''
+DIR=".codex_remote/sessions"
+files=\$(ls -t "\$DIR"/*.log 2>/dev/null | grep -v '\\\\.stderr\\\\.log\$' | head -n 80 || true)
+printf "%s\\n" "\$files" | while IFS= read -r f; do
+  [ -f "\$f" ] || continue
+  tab=\$(basename "\$f" .log)
+  m=\$(stat -f %m "\$f" 2>/dev/null || stat -c %Y "\$f" 2>/dev/null || echo 0)
+  printf "$begin\\t%s\\t%s\\n" "\$tab" "\$m"
+  head -n 60 "\$f" 2>/dev/null || true
+  printf "$tail\\n"
+  tail -n 120 "\$f" 2>/dev/null || true
+  printf "$end\\n"
+done
+''';
+
+    RunCommandResult res;
+    try {
+      res = await runShellCommand(script);
+    } catch (_) {
+      return const [];
+    }
+    if (res.stdout.trim().isEmpty) return const [];
+
+    final out = <Conversation>[];
+    String? activeTabId;
+    int activeMtimeSec = 0;
+    var inTail = false;
+    var headBuf = StringBuffer();
+    var tailBuf = StringBuffer();
+
+    void flush() {
+      final tabId = activeTabId;
+      if (tabId == null || tabId.isEmpty) return;
+      final parsed = _parseThreadAndPreviewFromJsonl(
+        head: headBuf.toString(),
+        tail: tailBuf.toString(),
+      );
+      final threadId = parsed.threadId;
+      if (threadId.isEmpty) return;
+      final ms = activeMtimeSec > 0
+          ? activeMtimeSec * 1000
+          : DateTime.now().toUtc().millisecondsSinceEpoch;
+      out.add(
+        Conversation(
+          threadId: threadId,
+          preview: parsed.preview,
+          tabId: tabId,
+          createdAtMs: ms,
+          lastUsedAtMs: ms,
+        ),
+      );
+    }
+
+    for (final line in const LineSplitter().convert(res.stdout)) {
+      final l = line.trimRight();
+      if (l.startsWith(begin)) {
+        // Flush previous
+        flush();
+        headBuf = StringBuffer();
+        tailBuf = StringBuffer();
+        inTail = false;
+        final parts = l.split('\t');
+        activeTabId = parts.length >= 2 ? parts[1].trim() : '';
+        activeMtimeSec = 0;
+        if (parts.length >= 3) {
+          activeMtimeSec = int.tryParse(parts[2].trim()) ?? 0;
+        }
+        continue;
+      }
+      if (l == tail) {
+        inTail = true;
+        continue;
+      }
+      if (l == end) {
+        flush();
+        activeTabId = null;
+        activeMtimeSec = 0;
+        headBuf = StringBuffer();
+        tailBuf = StringBuffer();
+        inTail = false;
+        continue;
+      }
+      if (activeTabId == null) continue;
+      if (inTail) {
+        tailBuf.writeln(l);
+      } else {
+        headBuf.writeln(l);
+      }
+    }
+    // Flush trailing file if end marker missing.
+    flush();
+
+    out.sort((a, b) => b.lastUsedAtMs.compareTo(a.lastUsedAtMs));
     return out;
   }
 
@@ -349,8 +458,30 @@ class ProjectSessionsController extends ProjectSessionsControllerBase {
 
     final active = tabs[activeIndex.value.clamp(0, tabs.length - 1)];
     final session = sessionForTab(active);
+
+    // If this device has never used this tab before, populate the stored
+    // remote job id from the project's `.codex_remote` artifacts so we can
+    // "latch onto" an in-progress tmux/nohup job and start tailing logs.
+    if (!args.target.local) {
+      final jobRelPath = '.codex_remote/sessions/$tabId.job';
+      try {
+        final res = await runShellCommand(
+          'if [ -f ${_shQuote(jobRelPath)} ]; then head -n 1 ${_shQuote(jobRelPath)}; fi',
+        );
+        final job = res.stdout.trim();
+        if (job.isNotEmpty) {
+          await _store.saveRemoteJobId(
+            targetKey: args.target.targetKey,
+            projectPath: args.project.path,
+            tabId: tabId,
+            remoteJobId: job,
+          );
+        }
+      } catch (_) {}
+    }
+
     await session.resumeThreadById(conversation.threadId, preview: conversation.preview);
-    await session.reattachIfNeeded(backfillLines: 0);
+    await session.reattachIfNeeded(backfillLines: 200);
   }
 
   @override

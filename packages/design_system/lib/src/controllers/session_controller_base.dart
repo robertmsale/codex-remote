@@ -17,5 +17,6 @@ abstract class SessionControllerBase extends GetxController {
   Future<void> sendQuickReply(String value);
   Future<void> resumeThreadById(String id, {String? preview});
   Future<void> reattachIfNeeded({int backfillLines});
+  Future<void> loadImageAttachment(CustomMessage message);
   void stop();
 }

@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:design_system/design_system.dart';
 import 'package:flutter/material.dart';
@@ -93,6 +94,7 @@ class SessionController extends SessionControllerBase {
   static const _system = 'system';
   static const _clientUserMessageType = 'client.user_message';
   static const _clientGitCommitType = 'client.git_commit';
+  static const _maxImageBytes = 10 * 1024 * 1024;
 
   @override
   void onInit() {
@@ -236,6 +238,152 @@ class SessionController extends SessionControllerBase {
 
   @override
   Future<void> sendQuickReply(String value) => sendText(value);
+
+  @override
+  Future<void> loadImageAttachment(CustomMessage message) async {
+    final meta = message.metadata ?? const {};
+    if (meta['kind']?.toString() != 'codex_image') return;
+
+    final existingBytes = meta['bytes'];
+    if (existingBytes is Uint8List && existingBytes.isNotEmpty) return;
+
+    final status = meta['status']?.toString() ?? '';
+    if (status == 'loading') return;
+
+    String rawPath = meta['path']?.toString() ?? '';
+    if (rawPath.trim().isEmpty) return;
+
+    rawPath = _normalizeWorkspacePath(rawPath);
+    if (!_isPathWithinWorkspace(rawPath)) {
+      await _updateImageMessage(
+        message,
+        status: 'error',
+        error: 'Image path is outside the workspace.',
+      );
+      return;
+    }
+
+    await _updateImageMessage(message, status: 'loading');
+
+    try {
+      final bytes = target.local
+          ? await _readLocalImageBytes(rawPath)
+          : await _readRemoteImageBytes(rawPath);
+      await _updateImageMessage(message, status: 'loaded', bytes: bytes);
+    } catch (e) {
+      await _updateImageMessage(message, status: 'error', error: '$e');
+    }
+  }
+
+  String _normalizeWorkspacePath(String path) {
+    final trimmed = path.trim();
+    if (trimmed.isEmpty) return trimmed;
+    if (trimmed.startsWith('/')) return trimmed;
+    var rel = trimmed;
+    if (rel.startsWith('./')) rel = rel.substring(2);
+    if (projectPath.endsWith('/')) return '$projectPath$rel';
+    return '$projectPath/$rel';
+  }
+
+  bool _isPathWithinWorkspace(String absPath) {
+    final root = projectPath.endsWith('/') ? projectPath : '$projectPath/';
+    return absPath == projectPath || absPath.startsWith(root);
+  }
+
+  Future<Uint8List> _readLocalImageBytes(String absPath) async {
+    final file = File(absPath);
+    if (!await file.exists()) {
+      throw StateError('Image not found: $absPath');
+    }
+    final len = await file.length();
+    if (len > _maxImageBytes) {
+      throw StateError('Image too large (${(len / (1024 * 1024)).toStringAsFixed(1)} MB).');
+    }
+    final bytes = await file.readAsBytes();
+    if (bytes.isEmpty) throw StateError('Image was empty.');
+    return Uint8List.fromList(bytes);
+  }
+
+  Future<Uint8List> _readRemoteImageBytes(String absPath) async {
+    final profile = target.profile!;
+    final pem = await _storage.read(key: SecureStorageService.sshPrivateKeyPemKey);
+
+    final root = projectPath;
+    final cmdBody = [
+      'set -e',
+      'p=${_shQuote(absPath)}',
+      'root=${_shQuote(root)}',
+      'case "\$p" in',
+      '  "\$root"|"\\$root"/*) ;;',
+      '  *) echo "outside workspace" >&2; exit 3 ;;',
+      'esac',
+      '[ -f "\$p" ] || { echo "missing: \$p" >&2; exit 4; }',
+      'sz=\$(stat -f %z "\$p" 2>/dev/null || stat -c %s "\$p" 2>/dev/null || echo 0)',
+      'if [ "\$sz" -gt ${_maxImageBytes.toString()} ]; then',
+      '  echo "too large: \$sz bytes" >&2; exit 5;',
+      'fi',
+      'base64 < "\$p"',
+    ].join('\n');
+
+    SshCommandResult res;
+    try {
+      res = await _ssh.runCommandWithResult(
+        host: profile.host,
+        port: profile.port,
+        username: profile.username,
+        privateKeyPem: pem,
+        password: _sshPassword,
+        command: 'sh -c ${_shQuote(cmdBody)}',
+      );
+    } catch (_) {
+      if (_sshPassword == null) {
+        final pw = await _promptForPassword();
+        if (pw == null || pw.isEmpty) rethrow;
+        _sshPassword = pw;
+        res = await _ssh.runCommandWithResult(
+          host: profile.host,
+          port: profile.port,
+          username: profile.username,
+          privateKeyPem: pem,
+          password: _sshPassword,
+          command: 'sh -c ${_shQuote(cmdBody)}',
+        );
+      } else {
+        rethrow;
+      }
+    }
+
+    final exit = res.exitCode ?? 1;
+    if (exit != 0) {
+      final err = res.stderr.trim().isEmpty ? 'Failed to read image.' : res.stderr.trim();
+      throw StateError(err);
+    }
+
+    final b64 = res.stdout.replaceAll(RegExp(r'\s+'), '');
+    if (b64.isEmpty) throw StateError('Remote returned empty image payload.');
+    final decoded = base64.decode(b64);
+    if (decoded.isEmpty) throw StateError('Decoded image was empty.');
+    return Uint8List.fromList(decoded);
+  }
+
+  Future<void> _updateImageMessage(
+    CustomMessage message, {
+    required String status,
+    Uint8List? bytes,
+    String? error,
+  }) async {
+    try {
+      final next = Map<String, Object?>.from(message.metadata ?? const {});
+      next['status'] = status;
+      if (bytes != null) next['bytes'] = bytes;
+      if (error != null && error.trim().isNotEmpty) {
+        next['error'] = error.trim();
+      } else {
+        next.remove('error');
+      }
+      await chatController.updateMessage(message, message.copyWith(metadata: next));
+    } catch (_) {}
+  }
 
   Future<void> _loadThreadId() async {
     final stored = await _sessionStore.loadThreadId(
@@ -2010,6 +2158,15 @@ class SessionController extends SessionControllerBase {
           );
           if (messages.isNotEmpty) {
             await chatController.insertAllMessages(messages, animated: true);
+            for (final m in messages) {
+              if (m is! CustomMessage) continue;
+              final meta = m.metadata ?? const {};
+              if (meta['kind']?.toString() != 'codex_image') continue;
+              final status = meta['status']?.toString();
+              if (status == 'loading') {
+                unawaited(loadImageAttachment(m));
+              }
+            }
           }
           return;
         }
@@ -2051,6 +2208,24 @@ class SessionController extends SessionControllerBase {
             text: resp.message.isEmpty ? '(empty response)' : resp.message,
           ),
         ];
+
+        for (final img in resp.images) {
+          final path = img.path.trim();
+          if (path.isEmpty) continue;
+          out.add(
+            Message.custom(
+              id: _uuid.v4(),
+              authorId: _codex,
+              createdAt: DateTime.now().toUtc(),
+              metadata: {
+                'kind': 'codex_image',
+                'path': path,
+                if (img.caption.trim().isNotEmpty) 'caption': img.caption.trim(),
+                'status': replay ? 'tap_to_load' : 'loading',
+              },
+            ),
+          );
+        }
 
         final commitMessage = resp.commitMessage.trim();
         out.add(

@@ -11,7 +11,7 @@ abstract final class CodexOutputSchema {
     'description':
         'Final structured response from Codex. This must be valid JSON and MUST match this schema exactly. '
             'The client uses `message` for user-visible output, `commit_message` to optionally auto-commit git changes, '
-            'and `actions` to render interactive buttons (quick replies).',
+            '`images` to reference image files produced in the workspace, and `actions` to render interactive buttons (quick replies).',
     'properties': {
       'message': {
         'type': 'string',
@@ -28,6 +28,30 @@ abstract final class CodexOutputSchema {
                 'The client will run `git add -A && git commit -m "<commit_message>"` only if there are uncommitted changes. '
                 'Provide this even if you made no changes (use something like "No changes").',
         'minLength': 1,
+      },
+      'images': {
+        'type': 'array',
+        'description':
+            'Optional image references produced during this turn. '
+                'Each entry must use an absolute `path` to an image file inside the workspace (the current project directory). '
+                'The client may fetch and render these images on-demand.',
+        'items': {
+          'type': 'object',
+          'properties': {
+            'path': {
+              'type': 'string',
+              'description':
+                  'Absolute filesystem path to an image file within the workspace (project directory).',
+              'minLength': 1,
+            },
+            'caption': {
+              'type': 'string',
+              'description': 'Optional short caption shown under the image.',
+            },
+          },
+          'required': ['path'],
+          'additionalProperties': false,
+        },
       },
       'actions': {
         'type': 'array',
@@ -64,7 +88,7 @@ abstract final class CodexOutputSchema {
         },
       },
     },
-    'required': ['message', 'commit_message', 'actions'],
+    'required': ['message', 'commit_message', 'images', 'actions'],
     'additionalProperties': false,
     'strict': true,
   };
