@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+root="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+if [[ -z "${root}" ]]; then
+  exit 0
+fi
+
+cd "${root}"
+
+# Only run when relevant inputs are being committed.
+if ! git diff --cached --name-only | grep -Eq '^(native/|rust/|pubspec\.yaml)'; then
+  exit 0
+fi
+
+if [[ ! -f pubspec.yaml ]]; then
+  exit 0
+fi
+
+if ! grep -Eq '^[[:space:]]*rinf:' pubspec.yaml; then
+  exit 0
+fi
+
+echo "[pre-commit] rinf gen"
+if command -v dart >/dev/null 2>&1; then
+  dart run rinf gen
+elif command -v flutter >/dev/null 2>&1; then
+  flutter pub run rinf gen
+else
+  echo "[pre-commit] Skipping: neither 'dart' nor 'flutter' found in PATH." >&2
+fi
+

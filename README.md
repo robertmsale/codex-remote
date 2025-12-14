@@ -50,6 +50,12 @@ Install dependencies:
 flutter pub get
 ```
 
+Install git hooks (runs `rinf gen` on commit):
+
+```bash
+./scripts/install-git-hooks.sh
+```
+
 Run macOS:
 
 ```bash
