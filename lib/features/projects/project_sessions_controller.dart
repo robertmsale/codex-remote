@@ -310,7 +310,7 @@ class ProjectSessionsController extends ProjectSessionsControllerBase {
     if (!args.target.local) {
       return _discoverConversationsFromRemoteLogs();
     }
-    if (!Platform.isMacOS) return const [];
+    if (!Platform.isMacOS && !Platform.isLinux) return const [];
 
     final sessionsDir = Directory('${args.project.path}/.field_exec/sessions');
     if (!await sessionsDir.exists()) return const [];
@@ -633,8 +633,8 @@ done
   @override
   Future<String> loadDeveloperInstructions() async {
     if (args.target.local) {
-      if (!Platform.isMacOS) {
-        throw StateError('Local mode is only supported on macOS.');
+      if (!Platform.isMacOS && !Platform.isLinux) {
+        throw StateError('Local mode is only supported on macOS/Linux.');
       }
       final dir = Directory('${args.project.path}/.field_exec');
       await dir.create(recursive: true);
@@ -662,8 +662,8 @@ done
   Future<void> saveDeveloperInstructions(String instructions) async {
     final text = _sanitizeDevInstructions(instructions);
     if (args.target.local) {
-      if (!Platform.isMacOS) {
-        throw StateError('Local mode is only supported on macOS.');
+      if (!Platform.isMacOS && !Platform.isLinux) {
+        throw StateError('Local mode is only supported on macOS/Linux.');
       }
       final dir = Directory('${args.project.path}/.field_exec');
       await dir.create(recursive: true);
@@ -757,11 +757,11 @@ done
     }
 
     if (args.target.local) {
-      if (!Platform.isMacOS) {
+      if (!Platform.isMacOS && !Platform.isLinux) {
         return const RunCommandResult(
           exitCode: 1,
           stdout: '',
-          stderr: 'Local mode is only supported on macOS.',
+          stderr: 'Local mode is only supported on macOS/Linux.',
         );
       }
       final res = await Process.run('/bin/sh', [

@@ -22,8 +22,10 @@ class ConnectionController extends ConnectionControllerBase {
   @override
   final privateKeyPassphraseController = TextEditingController();
 
+  static bool _supportsLocalRunner() => Platform.isMacOS || Platform.isLinux;
+
   @override
-  final useLocalRunner = (Platform.isMacOS).obs;
+  final useLocalRunner = (_supportsLocalRunner()).obs;
 
   @override
   final remoteShell = PosixShell.sh.obs;
@@ -407,8 +409,8 @@ class ConnectionController extends ConnectionControllerBase {
 
   @override
   Future<void> runLocalCodex() async {
-    if (!Platform.isMacOS) {
-      status.value = 'Local runner only supported on macOS.';
+    if (!_supportsLocalRunner()) {
+      status.value = 'Local runner only supported on macOS/Linux.';
       return;
     }
     Get.toNamed(DesignRoutes.projects, arguments: const TargetArgs.local());
