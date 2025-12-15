@@ -1,6 +1,6 @@
 import 'dart:async';
-import 'dart:io';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
@@ -22,6 +22,9 @@ class ProjectSessionsController extends ProjectSessionsControllerBase {
   final ProjectArgs args;
 
   ProjectSessionsController({required this.args});
+
+  static const _tabsJsonRelPath = '.field_exec/tabs.json';
+  static const _projectEventsJsonlRelPath = '.field_exec/project_events.jsonl';
 
   @override
   final projectName = ''.obs;
@@ -52,11 +55,19 @@ class ProjectSessionsController extends ProjectSessionsControllerBase {
   static const _devInstructionsRelPath =
       '.field_exec/developer_instructions.txt';
 
+  StreamSubscription<FileSystemEvent>? _localSyncSub;
+  RustSshCommandProcess? _remoteEventsTail;
+  StreamSubscription<String>? _remoteEventsOutSub;
+  StreamSubscription<String>? _remoteEventsErrSub;
+  Timer? _syncDebounce;
+  Future<void> _syncQueue = Future.value();
+  var _syncStarted = false;
+
   @override
   void onInit() {
     super.onInit();
     projectName.value = args.project.name;
-    _load();
+    unawaited(_load());
     _activeWorker1 = ever<int>(activeIndex, (_) => _updateActiveSession());
     _activeWorker2 = ever<List<ProjectTab>>(
       tabs,
@@ -69,6 +80,26 @@ class ProjectSessionsController extends ProjectSessionsControllerBase {
   void onClose() {
     _activeWorker1?.dispose();
     _activeWorker2?.dispose();
+    try {
+      _syncDebounce?.cancel();
+    } catch (_) {}
+    _syncDebounce = null;
+    try {
+      _localSyncSub?.cancel();
+    } catch (_) {}
+    _localSyncSub = null;
+    try {
+      _remoteEventsOutSub?.cancel();
+    } catch (_) {}
+    _remoteEventsOutSub = null;
+    try {
+      _remoteEventsErrSub?.cancel();
+    } catch (_) {}
+    _remoteEventsErrSub = null;
+    try {
+      _remoteEventsTail?.cancel();
+    } catch (_) {}
+    _remoteEventsTail = null;
     _active.setActive(null);
     super.onClose();
   }
@@ -99,15 +130,11 @@ class ProjectSessionsController extends ProjectSessionsControllerBase {
   }
 
   Future<void> _load() async {
-    final loaded = await _tabsStore.loadTabs(
-      targetKey: args.target.targetKey,
-      projectPath: args.project.path,
-    );
+    await _ensureSharedTabFiles();
 
-    if (loaded.isEmpty) {
-      final id = _uuid.v4();
-      final initial = [ProjectTab(id: id, title: 'Tab 1')];
-      tabs.assignAll(initial);
+    final shared = await _readSharedTabs();
+    if (shared != null && shared.isNotEmpty) {
+      tabs.assignAll(shared);
       _ensureSessionControllers();
       await _tabsStore.saveTabs(
         targetKey: args.target.targetKey,
@@ -115,11 +142,304 @@ class ProjectSessionsController extends ProjectSessionsControllerBase {
         tabs: tabs.toList(growable: false),
       );
     } else {
-      tabs.assignAll(loaded);
-      _ensureSessionControllers();
+      final loaded = await _tabsStore.loadTabs(
+        targetKey: args.target.targetKey,
+        projectPath: args.project.path,
+      );
+
+      if (loaded.isEmpty) {
+        final id = _uuid.v4();
+        final initial = [ProjectTab(id: id, title: 'Tab 1')];
+        tabs.assignAll(initial);
+        _ensureSessionControllers();
+        await _tabsStore.saveTabs(
+          targetKey: args.target.targetKey,
+          projectPath: args.project.path,
+          tabs: tabs.toList(growable: false),
+        );
+      } else {
+        tabs.assignAll(loaded);
+        _ensureSessionControllers();
+      }
+
+      await _writeSharedTabs(tabs.toList(growable: false));
     }
 
+    _startSyncWatchersIfNeeded();
+
     isReady.value = true;
+  }
+
+  Future<void> _ensureSharedTabFiles() async {
+    if (args.target.local) {
+      final dir = Directory('${args.project.path}/.field_exec');
+      await dir.create(recursive: true);
+      await Directory(
+        '${args.project.path}/.field_exec/sessions',
+      ).create(recursive: true);
+      final tabsFile = File('${args.project.path}/$_tabsJsonRelPath');
+      if (!await tabsFile.exists()) {
+        await tabsFile.writeAsString('', flush: true);
+      }
+      final eventsFile = File(
+        '${args.project.path}/$_projectEventsJsonlRelPath',
+      );
+      if (!await eventsFile.exists()) {
+        await eventsFile.writeAsString('', flush: true);
+      }
+      return;
+    }
+
+    // Remote: best-effort creation via a single command (no interactive auth).
+    try {
+      await runShellCommand(
+        'mkdir -p .field_exec .field_exec/sessions && touch ${_shQuote(_tabsJsonRelPath)} ${_shQuote(_projectEventsJsonlRelPath)}',
+      );
+    } catch (_) {}
+  }
+
+  static bool _tabsEqual(List<ProjectTab> a, List<ProjectTab> b) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i].id != b[i].id) return false;
+      if (a[i].title != b[i].title) return false;
+    }
+    return true;
+  }
+
+  Future<List<ProjectTab>?> _readSharedTabs() async {
+    try {
+      if (args.target.local) {
+        final file = File('${args.project.path}/$_tabsJsonRelPath');
+        if (!await file.exists()) return null;
+        final raw = (await file.readAsString()).trim();
+        if (raw.isEmpty) return null;
+        final decoded = jsonDecode(raw);
+        if (decoded is Map) {
+          final tabsRaw = decoded['tabs'];
+          if (tabsRaw is List) {
+            return tabsRaw
+                .whereType<Map>()
+                .map((m) => ProjectTab.fromJson(m.cast<String, Object?>()))
+                .where((t) => t.id.isNotEmpty)
+                .toList(growable: false);
+          }
+        }
+        return null;
+      }
+
+      final res = await runShellCommand(
+        'if [ -f ${_shQuote(_tabsJsonRelPath)} ]; then cat ${_shQuote(_tabsJsonRelPath)}; fi',
+      );
+      final raw = res.stdout.trim();
+      if (raw.isEmpty) return null;
+      final decoded = jsonDecode(raw);
+      if (decoded is Map) {
+        final tabsRaw = decoded['tabs'];
+        if (tabsRaw is List) {
+          return tabsRaw
+              .whereType<Map>()
+              .map((m) => ProjectTab.fromJson(m.cast<String, Object?>()))
+              .where((t) => t.id.isNotEmpty)
+              .toList(growable: false);
+        }
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  Future<void> _appendProjectEvent(String jsonLine) async {
+    final line = jsonLine.trimRight();
+    if (line.isEmpty) return;
+
+    try {
+      if (args.target.local) {
+        final file = File('${args.project.path}/$_projectEventsJsonlRelPath');
+        await file.writeAsString('$line\n', mode: FileMode.append, flush: true);
+        return;
+      }
+
+      await runShellCommand(
+        'printf %s\\\\n ${_shQuote(line)} >> ${_shQuote(_projectEventsJsonlRelPath)}',
+      );
+    } catch (_) {}
+  }
+
+  Future<void> _writeSharedTabs(List<ProjectTab> nextTabs) async {
+    if (nextTabs.isEmpty) return;
+    final nowMs = DateTime.now().toUtc().millisecondsSinceEpoch;
+    final payload = <String, Object?>{
+      'version': 1,
+      'updated_at_ms_utc': nowMs,
+      'tabs': nextTabs.map((t) => t.toJson()).toList(growable: false),
+    };
+    final json = jsonEncode(payload);
+
+    try {
+      if (args.target.local) {
+        final base = args.project.path;
+        final tmp = File('$base/$_tabsJsonRelPath.tmp');
+        final dst = File('$base/$_tabsJsonRelPath');
+        await tmp.writeAsString(json, flush: true);
+        await tmp.rename(dst.path);
+        await _appendProjectEvent(
+          jsonEncode(<String, Object?>{
+            'type': 'tabs.updated',
+            'updated_at_ms_utc': nowMs,
+          }),
+        );
+        return;
+      }
+
+      final b64 = base64.encode(utf8.encode(json));
+      final eventLine = jsonEncode(<String, Object?>{
+        'type': 'tabs.updated',
+        'updated_at_ms_utc': nowMs,
+      });
+      final script = [
+        'mkdir -p .field_exec >/dev/null 2>&1 || true',
+        'tmp=${_shQuote('$_tabsJsonRelPath.tmp')}',
+        'b64=${_shQuote(b64)}',
+        r'printf %s "$b64" | base64 -D 2>/dev/null > "$tmp" || printf %s "$b64" | base64 -d 2>/dev/null > "$tmp"',
+        r'mv "$tmp" '
+            '${_shQuote(_tabsJsonRelPath)}',
+        'printf %s\\\\n ${_shQuote(eventLine)} >> ${_shQuote(_projectEventsJsonlRelPath)}',
+      ].join('\n');
+      await runShellCommand(script);
+    } catch (_) {}
+  }
+
+  void _startSyncWatchersIfNeeded() {
+    if (_syncStarted) return;
+    _syncStarted = true;
+
+    if (args.target.local) {
+      if (!Platform.isMacOS && !Platform.isLinux) return;
+      final dir = Directory('${args.project.path}/.field_exec');
+      if (!dir.existsSync()) return;
+      _localSyncSub = dir.watch(recursive: false).listen((evt) {
+        final p = evt.path;
+        if (!p.endsWith('tabs.json') && !p.endsWith('project_events.jsonl')) {
+          return;
+        }
+        _scheduleReloadSharedTabs();
+      });
+      return;
+    }
+
+    unawaited(_startRemoteEventsTail());
+  }
+
+  void _scheduleReloadSharedTabs() {
+    try {
+      _syncDebounce?.cancel();
+    } catch (_) {}
+    _syncDebounce = Timer(const Duration(milliseconds: 250), () {
+      _syncDebounce = null;
+      _syncQueue = _syncQueue.then((_) async {
+        final next = await _readSharedTabs();
+        if (next == null || next.isEmpty) return;
+        final current = tabs.toList(growable: false);
+        if (_tabsEqual(current, next)) return;
+
+        final activeId = current.isEmpty
+            ? null
+            : current[activeIndex.value.clamp(0, current.length - 1)].id;
+        final currentIds = current.map((t) => t.id).toSet();
+        final nextIds = next.map((t) => t.id).toSet();
+        final removed = currentIds.difference(nextIds);
+
+        tabs.assignAll(next);
+        _ensureSessionControllers();
+
+        if (tabs.isNotEmpty) {
+          if (activeId != null && activeId.isNotEmpty) {
+            final idx = tabs.indexWhere((t) => t.id == activeId);
+            activeIndex.value = (idx == -1 ? 0 : idx).clamp(0, tabs.length - 1);
+          } else {
+            activeIndex.value = 0;
+          }
+        } else {
+          activeIndex.value = 0;
+        }
+
+        for (final id in removed) {
+          try {
+            await _store.clearThreadId(
+              targetKey: args.target.targetKey,
+              projectPath: args.project.path,
+              tabId: id,
+            );
+            await _store.clearRemoteJobId(
+              targetKey: args.target.targetKey,
+              projectPath: args.project.path,
+              tabId: id,
+            );
+          } catch (_) {}
+
+          SchedulerBinding.instance.addPostFrameCallback((_) {
+            try {
+              Get.delete<SessionController>(tag: _sessionTag(id), force: true);
+            } catch (_) {}
+          });
+        }
+
+        try {
+          await _tabsStore.saveTabs(
+            targetKey: args.target.targetKey,
+            projectPath: args.project.path,
+            tabs: tabs.toList(growable: false),
+          );
+        } catch (_) {}
+      });
+    });
+  }
+
+  Future<void> _startRemoteEventsTail() async {
+    if (args.target.local) return;
+    if (_remoteEventsTail != null) return;
+    final profile = args.target.profile;
+    if (profile == null) return;
+
+    try {
+      final pem =
+          (await Get.find<SecureStorageService>().read(
+            key: SecureStorageService.sshPrivateKeyPemKey,
+          ))?.trim() ??
+          '';
+      if (pem.isEmpty) return;
+
+      await _ensureSharedTabFiles();
+
+      final remoteCmd =
+          'cd ${_shQuote(args.project.path)} && tail -n 0 -F ${_shQuote(_projectEventsJsonlRelPath)}';
+
+      final proc = await RustSshService.startCommand(
+        host: profile.host,
+        port: profile.port,
+        username: profile.username,
+        command: _wrapWithShell(profile.shell, remoteCmd),
+        privateKeyPemOverride: pem,
+        connectTimeout: const Duration(seconds: 10),
+        passwordProvider: null,
+      );
+
+      _remoteEventsTail = proc;
+
+      _remoteEventsOutSub = proc.stdoutLines.listen((line) {
+        if (line.trim().isEmpty) return;
+        if (!line.contains('tabs.updated')) return;
+        _scheduleReloadSharedTabs();
+      });
+      _remoteEventsErrSub = proc.stderrLines.listen((_) {});
+      unawaited(
+        proc.done.then((_) {
+          _remoteEventsTail = null;
+          _remoteEventsOutSub = null;
+          _remoteEventsErrSub = null;
+        }),
+      );
+    } catch (_) {}
   }
 
   void _ensureSessionControllers() {
@@ -158,6 +478,7 @@ class ProjectSessionsController extends ProjectSessionsControllerBase {
     tabs.add(tab);
     activeIndex.value = tabs.length - 1;
 
+    await _writeSharedTabs(tabs.toList(growable: false));
     await _tabsStore.saveTabs(
       targetKey: args.target.targetKey,
       projectPath: args.project.path,
@@ -169,24 +490,6 @@ class ProjectSessionsController extends ProjectSessionsControllerBase {
   Future<void> closeTab(ProjectTab tab) async {
     final idx = tabs.indexWhere((t) => t.id == tab.id);
     if (idx == -1) return;
-
-    // If this is the last remaining tab, don't remove it. Just clear the chat
-    // and thread so it behaves like starting a brand new session.
-    if (tabs.length <= 1) {
-      final session = sessionForTab(tab);
-      await session.resetSession();
-      await session.clearSessionArtifacts();
-
-      // Make it obvious that closing the last tab "did something".
-      tabs[0] = ProjectTab(id: tab.id, title: 'New tab');
-      activeIndex.value = 0;
-      await _tabsStore.saveTabs(
-        targetKey: args.target.targetKey,
-        projectPath: args.project.path,
-        tabs: tabs.toList(growable: false),
-      );
-      return;
-    }
 
     // Move selection away from the closing tab first to avoid transient builds
     // that still reference the soon-to-be-disposed SessionController.
@@ -218,6 +521,15 @@ class ProjectSessionsController extends ProjectSessionsControllerBase {
       } catch (_) {}
     });
 
+    if (tabs.isEmpty) {
+      final id = _uuid.v4();
+      final created = ProjectTab(id: id, title: 'Tab 1');
+      tabs.add(created);
+      activeIndex.value = 0;
+      _ensureSessionControllers();
+    }
+
+    await _writeSharedTabs(tabs.toList(growable: false));
     await _tabsStore.saveTabs(
       targetKey: args.target.targetKey,
       projectPath: args.project.path,
@@ -235,6 +547,7 @@ class ProjectSessionsController extends ProjectSessionsControllerBase {
 
     tabs[idx] = ProjectTab(id: tab.id, title: nextTitle);
 
+    await _writeSharedTabs(tabs.toList(growable: false));
     await _tabsStore.saveTabs(
       targetKey: args.target.targetKey,
       projectPath: args.project.path,
@@ -275,7 +588,9 @@ class ProjectSessionsController extends ProjectSessionsControllerBase {
           final bn = b.name.trim().toLowerCase();
           final c = an.compareTo(bn);
           if (c != 0) return c;
-          return a.path.trim().toLowerCase().compareTo(b.path.trim().toLowerCase());
+          return a.path.trim().toLowerCase().compareTo(
+            b.path.trim().toLowerCase(),
+          );
         });
         projectsController.projects.assignAll(items);
       } catch (_) {}
@@ -556,6 +871,7 @@ done
       final tab = ProjectTab(id: tabId, title: title);
       tabs.add(tab);
       _ensureSessionControllers();
+      await _writeSharedTabs(tabs.toList(growable: false));
       await _tabsStore.saveTabs(
         targetKey: args.target.targetKey,
         projectPath: args.project.path,
@@ -822,7 +1138,8 @@ done
         return const RunCommandResult(
           exitCode: 1,
           stdout: '',
-          stderr: 'SSH key authentication failed. Verify your SSH key is installed and accepted by the server.',
+          stderr:
+              'SSH key authentication failed. Verify your SSH key is installed and accepted by the server.',
         );
       }
       if (msg.contains('timeout')) {
