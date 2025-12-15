@@ -13,65 +13,58 @@ class ProjectsPage extends GetView<ProjectsControllerBase> {
     BuildContext context, {
     required String initialValue,
   }) async {
-    final text = TextEditingController(text: initialValue);
-    try {
-      return showDialog<String>(
-        context: context,
-        builder: (context) => AlertDialog(
-          title: const Text('Rename project'),
-          content: TextField(
-            controller: text,
-            autofocus: true,
-            textInputAction: TextInputAction.done,
-            decoration: const InputDecoration(labelText: 'Project name'),
-            onSubmitted: (v) => Navigator.of(context).pop(v),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(),
-              child: const Text('Cancel'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.of(context).pop(text.text),
-              child: const Text('Save'),
-            ),
-          ],
+    var value = initialValue;
+    return showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Rename project'),
+        content: TextFormField(
+          initialValue: initialValue,
+          autofocus: true,
+          textInputAction: TextInputAction.done,
+          decoration: const InputDecoration(labelText: 'Project name'),
+          onChanged: (v) => value = v,
+          onFieldSubmitted: (v) => Navigator.of(context).pop(v),
         ),
-      );
-    } finally {
-      text.dispose();
-    }
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(value),
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<String?> _promptNewGroupName(BuildContext context) async {
-    final text = TextEditingController();
-    try {
-      return showDialog<String>(
-        context: context,
-        builder: (context) => AlertDialog(
-          title: const Text('New group'),
-          content: TextField(
-            controller: text,
-            autofocus: true,
-            textInputAction: TextInputAction.done,
-            decoration: const InputDecoration(labelText: 'Group name'),
-            onSubmitted: (v) => Navigator.of(context).pop(v),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(),
-              child: const Text('Cancel'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.of(context).pop(text.text),
-              child: const Text('Create'),
-            ),
-          ],
+    var value = '';
+    return showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('New group'),
+        content: TextFormField(
+          autofocus: true,
+          textInputAction: TextInputAction.done,
+          decoration: const InputDecoration(labelText: 'Group name'),
+          onChanged: (v) => value = v,
+          onFieldSubmitted: (v) => Navigator.of(context).pop(v),
         ),
-      );
-    } finally {
-      text.dispose();
-    }
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(value),
+            child: const Text('Create'),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<String?> _pickGroupForProject({

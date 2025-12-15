@@ -14,6 +14,8 @@ enum _BootstrapStep {
   pickHostKey,
 }
 
+enum _ConnectMode { remote, local }
+
 class ConnectionPage extends StatefulWidget {
   const ConnectionPage({super.key});
 
@@ -54,7 +56,44 @@ class _ConnectionPageState extends State<ConnectionPage> {
     super.dispose();
   }
 
-  bool get _isRemote => !(controller.useLocalRunner.value && Platform.isMacOS);
+  bool get _supportsLocalRunner => Platform.isMacOS || Platform.isLinux;
+
+  bool get _isRemote => !_supportsLocalRunner || !controller.useLocalRunner.value;
+
+  Widget _modePicker() {
+    if (!_supportsLocalRunner) return const SizedBox.shrink();
+    return Obx(() {
+      final selected = controller.useLocalRunner.value
+          ? {_ConnectMode.local}
+          : {_ConnectMode.remote};
+      return SegmentedButton<_ConnectMode>(
+        showSelectedIcon: false,
+        segments: const [
+          ButtonSegment(
+            value: _ConnectMode.remote,
+            label: Text('Remote (SSH)'),
+          ),
+          ButtonSegment(
+            value: _ConnectMode.local,
+            label: Text('Local'),
+          ),
+        ],
+        selected: selected,
+        onSelectionChanged: controller.isBusy.value
+            ? null
+            : (set) {
+                if (set.isEmpty) return;
+                final next = set.first;
+                controller.useLocalRunner.value = next == _ConnectMode.local;
+                controller.status.value = '';
+                setState(() {
+                  _error = null;
+                  _step = _BootstrapStep.method;
+                });
+              },
+      );
+    });
+  }
 
   Future<void> _bootstrapSavePrivateKey() async {
     if (_working) return;
@@ -185,6 +224,10 @@ class _ConnectionPageState extends State<ConnectionPage> {
                 'SSH Setup',
                 style: Theme.of(context).textTheme.headlineSmall,
               ),
+              if (_supportsLocalRunner) ...[
+                const SizedBox(height: 12),
+                _modePicker(),
+              ],
               const SizedBox(height: 8),
               const Text(
                 'Private key authentication is required. Complete setup to continue.',
@@ -365,6 +408,10 @@ class _ConnectionPageState extends State<ConnectionPage> {
       padding: const EdgeInsets.all(16),
       children: [
         Text('FieldExec', style: Theme.of(context).textTheme.headlineSmall),
+        if (_supportsLocalRunner) ...[
+          const SizedBox(height: 12),
+          _modePicker(),
+        ],
         const SizedBox(height: 16),
         TextField(
           controller: controller.userAtHostController,
@@ -447,8 +494,12 @@ class _ConnectionPageState extends State<ConnectionPage> {
       children: [
         Text('FieldExec', style: Theme.of(context).textTheme.headlineSmall),
         const SizedBox(height: 12),
+        if (_supportsLocalRunner) ...[
+          _modePicker(),
+          const SizedBox(height: 12),
+        ],
         const Text(
-          'Local mode runs Codex directly on this Mac.\n'
+          'Local mode runs Codex directly on this computer (macOS/Linux).\n'
           'You will pick a local project path next.',
         ),
         const SizedBox(height: 16),
@@ -498,7 +549,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
       return Scaffold(
         body: SafeArea(
           child: Obx(() {
-            if (controller.useLocalRunner.value && Platform.isMacOS) {
+            if (_supportsLocalRunner && controller.useLocalRunner.value) {
               return _localConnect();
             }
             return _remoteConnect();

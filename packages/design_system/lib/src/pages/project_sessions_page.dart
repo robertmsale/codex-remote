@@ -185,69 +185,63 @@ class _ProjectSessionsPageState extends State<ProjectSessionsPage>
   }
 
   Future<String?> _promptRenameTab(ProjectTab tab) async {
-    final text = TextEditingController(text: tab.title);
-    try {
-      return showDialog<String>(
-        context: context,
-        builder: (context) {
-          return AlertDialog(
-            title: const Text('Rename tab'),
-            content: TextField(
-              controller: text,
-              autofocus: true,
-              textInputAction: TextInputAction.done,
-              decoration: const InputDecoration(labelText: 'Tab name'),
-              onSubmitted: (v) => Navigator.of(context).pop(v),
+    var value = tab.title;
+    return showDialog<String>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('Rename tab'),
+          content: TextFormField(
+            initialValue: tab.title,
+            autofocus: true,
+            textInputAction: TextInputAction.done,
+            decoration: const InputDecoration(labelText: 'Tab name'),
+            onChanged: (v) => value = v,
+            onFieldSubmitted: (v) => Navigator.of(context).pop(v),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Cancel'),
             ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.of(context).pop(),
-                child: const Text('Cancel'),
-              ),
-              FilledButton(
-                onPressed: () => Navigator.of(context).pop(text.text),
-                child: const Text('Save'),
-              ),
-            ],
-          );
-        },
-      );
-    } finally {
-      text.dispose();
-    }
+            FilledButton(
+              onPressed: () => Navigator.of(context).pop(value),
+              child: const Text('Save'),
+            ),
+          ],
+        );
+      },
+    );
   }
 
   Future<String?> _promptRenameProject() async {
-    final text = TextEditingController(text: controller.projectName.value);
-    try {
-      return showDialog<String>(
-        context: context,
-        builder: (context) {
-          return AlertDialog(
-            title: const Text('Rename project'),
-            content: TextField(
-              controller: text,
-              autofocus: true,
-              textInputAction: TextInputAction.done,
-              decoration: const InputDecoration(labelText: 'Project name'),
-              onSubmitted: (v) => Navigator.of(context).pop(v),
+    var value = controller.projectName.value;
+    return showDialog<String>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('Rename project'),
+          content: TextFormField(
+            initialValue: controller.projectName.value,
+            autofocus: true,
+            textInputAction: TextInputAction.done,
+            decoration: const InputDecoration(labelText: 'Project name'),
+            onChanged: (v) => value = v,
+            onFieldSubmitted: (v) => Navigator.of(context).pop(v),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Cancel'),
             ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.of(context).pop(),
-                child: const Text('Cancel'),
-              ),
-              FilledButton(
-                onPressed: () => Navigator.of(context).pop(text.text),
-                child: const Text('Save'),
-              ),
-            ],
-          );
-        },
-      );
-    } finally {
-      text.dispose();
-    }
+            FilledButton(
+              onPressed: () => Navigator.of(context).pop(value),
+              child: const Text('Save'),
+            ),
+          ],
+        );
+      },
+    );
   }
 
   @override
