@@ -42,7 +42,19 @@ class LocalShellService {
       throwOnError: false,
     );
 
-    final runFuture = shell.runExecutableArguments(executable, arguments);
+    final runFuture = shell.runExecutableArguments(executable, arguments).catchError((
+      e,
+      st,
+    ) {
+      // `process_run` throws ShellException when a process is killed (e.g. when
+      // we cancel a long-lived `tail -F`). Treat that as a normal termination
+      // so callers don't see noisy "Unhandled Exception" logs.
+      final msg = e.toString();
+      final isKilled =
+          msg.contains('Killed by framework') ||
+          msg.contains('killed by framework');
+      return ProcessResult(0, isKilled ? 143 : 1, '', msg);
+    });
 
     void cancel() {
       try {

@@ -1582,7 +1582,7 @@ class SessionController extends SessionControllerBase {
       _insertEvent(type: 'tail_stderr', text: line);
     });
 
-    proc.done.then((_) {
+    proc.done.catchError((_) {}).whenComplete(() {
       if (_localTailToken != token) return;
       _cancelLocalTailOnly();
       _scheduleTailAutoRestart(local: true);
@@ -2572,7 +2572,7 @@ class SessionController extends SessionControllerBase {
       _insertEvent(type: 'tail_stderr', text: line);
     });
 
-    proc.done.then((_) {
+    proc.done.catchError((_) {}).whenComplete(() {
       // If this tail was cancelled/replaced intentionally, suppress noise.
       if (_tailToken != token) return;
       _cancelTailOnly();
