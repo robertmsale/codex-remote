@@ -46,7 +46,7 @@ abstract final class CodexOutputSchema {
             },
             'caption': {
               'type': 'string',
-              'description': 'Optional short caption shown under the image.',
+              'description': 'Short caption shown under the image.',
             },
           },
           'required': ['path', 'caption'],
