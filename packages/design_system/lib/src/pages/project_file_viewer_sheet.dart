@@ -264,6 +264,7 @@ class _FileLine extends StatelessWidget {
       constraints: BoxConstraints(minWidth: minWidth),
       padding: const EdgeInsets.symmetric(vertical: 2, horizontal: 8),
       child: Row(
+        mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           SizedBox(
@@ -275,7 +276,10 @@ class _FileLine extends StatelessWidget {
             ),
           ),
           const SizedBox(width: 12),
-          Expanded(child: Text(text, style: mono, softWrap: false)),
+          Flexible(
+            fit: FlexFit.loose,
+            child: Text(text, style: mono, softWrap: false),
+          ),
         ],
       ),
     );
