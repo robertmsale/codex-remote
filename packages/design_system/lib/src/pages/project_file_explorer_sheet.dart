@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../controllers/project_sessions_controller_base.dart';
+import 'project_file_viewer_sheet.dart';
 
 class _Entry {
   final String relPath; // relative to project root
@@ -93,6 +94,18 @@ class _ProjectFileExplorerSheetState extends State<ProjectFileExplorerSheet> {
     ScaffoldMessenger.of(
       context,
     ).showSnackBar(SnackBar(content: Text('Copied: $abs')));
+  }
+
+  Future<void> _openFile(String relPath) async {
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      isScrollControlled: true,
+      builder: (context) => ProjectFileViewerSheet(
+        controller: widget.controller,
+        relPath: relPath,
+      ),
+    );
   }
 
   Future<void> _loadDir() async {
@@ -561,7 +574,7 @@ class _ProjectFileExplorerSheetState extends State<ProjectFileExplorerSheet> {
               unawaited(_enterDir(e.relPath));
               return;
             }
-            unawaited(_copyPath(e.relPath));
+            unawaited(_openFile(e.relPath));
           },
           onLongPress: () => unawaited(_copyPath(e.relPath)),
         );
