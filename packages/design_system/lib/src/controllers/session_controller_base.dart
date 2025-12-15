@@ -9,6 +9,7 @@ abstract class SessionControllerBase extends GetxController {
   RxBool get isRunning;
   RxBool get isLoadingMoreHistory;
   RxBool get hasMoreHistory;
+  RxBool get needsScrollToBottom;
   RxnString get threadId;
   RxnString get remoteJobId;
   RxnString get thinkingPreview;

@@ -8,16 +8,71 @@ import 'package:get/get.dart';
 import '../controllers/session_controller_base.dart';
 import 'codex_composer.dart';
 
-class CodexChatView extends StatelessWidget {
+class CodexChatView extends StatefulWidget {
   final SessionControllerBase controller;
 
   const CodexChatView({super.key, required this.controller});
 
   @override
+  State<CodexChatView> createState() => _CodexChatViewState();
+}
+
+class _CodexChatViewState extends State<CodexChatView> {
+  final _scrollController = ScrollController();
+  bool _scrollToBottomScheduled = false;
+
+  SessionControllerBase get controller => widget.controller;
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  void _scheduleScrollToBottomIfNeeded() {
+    if (_scrollToBottomScheduled) return;
+    _scrollToBottomScheduled = true;
+
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted) return;
+      try {
+        final lastIndex = controller.chatController.messages.length - 1;
+        if (lastIndex >= 0) {
+          await controller.chatController.scrollToIndex(
+            lastIndex,
+            duration: Duration.zero,
+            alignment: 1,
+            offset: 0,
+          );
+        }
+      } catch (_) {}
+
+      // Fallback: if scroll methods are not attached yet, jump directly.
+      try {
+        if (_scrollController.hasClients) {
+          _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
+        }
+      } catch (_) {}
+
+      try {
+        controller.needsScrollToBottom.value = false;
+      } catch (_) {}
+
+      _scrollToBottomScheduled = false;
+    });
+  }
+
+  @override
   Widget build(BuildContext context) {
     final theme = ChatTheme.fromThemeData(Theme.of(context));
     return Obx(() {
-      final canLoadMore = controller.hasMoreHistory.value;
+      if (controller.needsScrollToBottom.value) {
+        _scheduleScrollToBottomIfNeeded();
+      }
+
+      final canLoadMore =
+          controller.hasMoreHistory.value &&
+          !controller.needsScrollToBottom.value;
 
       return Chat(
         chatController: controller.chatController,
@@ -30,6 +85,7 @@ class CodexChatView extends StatelessWidget {
           chatAnimatedListBuilder: (context, itemBuilder) {
             return ChatAnimatedList(
               itemBuilder: itemBuilder,
+              scrollController: _scrollController,
               bottomPadding: 120,
               onEndReached: canLoadMore ? controller.loadMoreHistory : null,
             );

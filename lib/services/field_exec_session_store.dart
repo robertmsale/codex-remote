@@ -22,6 +22,12 @@ class FieldExecSessionStore {
     String tabId,
   ) => 'field_exec_log_cursor_v1:$targetKey:$projectPath:$tabId';
 
+  static String _logLastLineHashKeyFor(
+    String targetKey,
+    String projectPath,
+    String tabId,
+  ) => 'field_exec_log_last_line_hash_v1:$targetKey:$projectPath:$tabId';
+
   Future<String?> loadThreadId({
     required String targetKey,
     required String projectPath,
@@ -151,5 +157,40 @@ class FieldExecSessionStore {
   }) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_logCursorKeyFor(targetKey, projectPath, tabId));
+  }
+
+  /// Stores a hash of the last observed JSONL line for this tab's log.
+  /// Used as a resilient resume marker when line counts/cursors are unreliable.
+  Future<String?> loadLogLastLineHash({
+    required String targetKey,
+    required String projectPath,
+    required String tabId,
+  }) async {
+    final prefs = await SharedPreferences.getInstance();
+    final v = prefs.getString(_logLastLineHashKeyFor(targetKey, projectPath, tabId));
+    final trimmed = (v ?? '').trim();
+    return trimmed.isEmpty ? null : trimmed;
+  }
+
+  Future<void> saveLogLastLineHash({
+    required String targetKey,
+    required String projectPath,
+    required String tabId,
+    required String hash,
+  }) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(
+      _logLastLineHashKeyFor(targetKey, projectPath, tabId),
+      hash.trim(),
+    );
+  }
+
+  Future<void> clearLogLastLineHash({
+    required String targetKey,
+    required String projectPath,
+    required String tabId,
+  }) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_logLastLineHashKeyFor(targetKey, projectPath, tabId));
   }
 }

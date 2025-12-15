@@ -839,6 +839,8 @@ class MockSessionController extends SessionControllerBase {
   @override
   final hasMoreHistory = true.obs;
   @override
+  final needsScrollToBottom = false.obs;
+  @override
   final threadId = RxnString('thread_mock_1234');
   @override
   final remoteJobId = RxnString('tmux:cr_tab1_1730000000000');

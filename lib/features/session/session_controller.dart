@@ -37,6 +37,9 @@ class SessionController extends SessionControllerBase {
   final isLoadingMoreHistory = false.obs;
   @override
   final hasMoreHistory = false.obs;
+  final _needsScrollToBottom = false.obs;
+  @override
+  RxBool get needsScrollToBottom => _needsScrollToBottom;
   @override
   final threadId = RxnString();
   @override
@@ -48,6 +51,7 @@ class SessionController extends SessionControllerBase {
   void Function()? _cancelCurrent;
   CustomMessage? _pendingActionsMessage;
   String _lastUserPromptPreview = '';
+  bool _repairedExplodedChat = false;
   // FieldExec uses key-based SSH for normal operation; password auth is only
   // used for explicit key-install bootstrap flows.
   //
@@ -55,6 +59,7 @@ class SessionController extends SessionControllerBase {
   // from normal session execution paths.
   String? _sshPassword = '';
   int _logLineCursor = 0;
+  String _logLastLineHash = '';
   static const _historyPageSizeLines = 400;
   int? _historyRemoteStartLine; // 1-based
   int? _historyLocalStartIndex; // 0-based
@@ -62,6 +67,8 @@ class SessionController extends SessionControllerBase {
   String? _historyFocusThreadId;
   Timer? _cursorSaveTimer;
   Future<void> _cursorSaveQueue = Future.value();
+  Timer? _hashSaveTimer;
+  Future<void> _hashSaveQueue = Future.value();
 
   static const _fieldExecDir = '.field_exec';
   String get _schemaRelPath => '$_fieldExecDir/output-schema.json';
@@ -88,8 +95,8 @@ class SessionController extends SessionControllerBase {
   Object? _localTailToken;
   Worker? _lifecycleWorker;
   Worker? _activeWorker;
-  final _recentLogLines = <String>[];
-  final _recentLogLineSet = <String>{};
+  final _recentLogLineHashes = <String>[];
+  final _recentLogLineHashSet = <String>{};
   var _autoCommitCatchUpInProgress = false;
 
   SessionController({
@@ -154,6 +161,9 @@ class SessionController extends SessionControllerBase {
     try {
       _cursorSaveTimer?.cancel();
     } catch (_) {}
+    try {
+      _hashSaveTimer?.cancel();
+    } catch (_) {}
     _cancelTailOnly();
     _cancelLocalTailOnly();
     chatController.dispose();
@@ -183,6 +193,7 @@ class SessionController extends SessionControllerBase {
       tabId: tabId,
     );
     await chatController.setMessages([]);
+    _needsScrollToBottom.value = false;
     _pendingActionsMessage = null;
   }
 
@@ -198,6 +209,7 @@ class SessionController extends SessionControllerBase {
     );
 
     await chatController.setMessages([]);
+    _needsScrollToBottom.value = false;
     _pendingActionsMessage = null;
     _historyLogRelPath = null;
     _historyFocusThreadId = id;
@@ -454,15 +466,20 @@ class SessionController extends SessionControllerBase {
         : trimmed;
     inputController.clear();
 
+    final createdAt = DateTime.now().toUtc();
     final userMessage = Message.text(
       id: _uuid.v4(),
       authorId: _me,
-      createdAt: DateTime.now().toUtc(),
+      createdAt: createdAt,
       text: trimmed,
     );
     await chatController.insertMessage(userMessage, animated: true);
 
-    await _runCodexTurn(prompt: trimmed);
+    await _runCodexTurn(
+      prompt: trimmed,
+      userMessageId: userMessage.id,
+      userMessageCreatedAt: createdAt,
+    );
   }
 
   @override
@@ -535,6 +552,14 @@ class SessionController extends SessionControllerBase {
       );
     } catch (_) {}
     _logLineCursor = 0;
+    try {
+      await _sessionStore.clearLogLastLineHash(
+        targetKey: target.targetKey,
+        projectPath: projectPath,
+        tabId: tabId,
+      );
+    } catch (_) {}
+    _logLastLineHash = '';
 
     hasMoreHistory.value = false;
     isLoadingMoreHistory.value = false;
@@ -929,6 +954,7 @@ class SessionController extends SessionControllerBase {
       await _loadThreadId();
       await _loadRemoteJobId();
       await _loadLogLineCursor();
+      await _loadLogLastLineHash();
       if (!target.local) {
         await _maybeReattachRemote();
       } else {
@@ -951,6 +977,20 @@ class SessionController extends SessionControllerBase {
     }
   }
 
+  Future<void> _loadLogLastLineHash() async {
+    try {
+      _logLastLineHash =
+          (await _sessionStore.loadLogLastLineHash(
+            targetKey: target.targetKey,
+            projectPath: projectPath,
+            tabId: tabId,
+          )) ??
+          '';
+    } catch (_) {
+      _logLastLineHash = '';
+    }
+  }
+
   void _bumpLogLineCursor() {
     _logLineCursor++;
     if (_cursorSaveTimer != null) return;
@@ -970,6 +1010,40 @@ class SessionController extends SessionControllerBase {
     });
   }
 
+  static String _fnv1a64Hex(String s) {
+    // 64-bit FNV-1a hash, returned as fixed-width hex.
+    const int fnvOffset = 0xcbf29ce484222325;
+    const int fnvPrime = 0x100000001b3;
+    var hash = fnvOffset;
+    final bytes = utf8.encode(s);
+    for (final b in bytes) {
+      hash ^= b;
+      hash = (hash * fnvPrime).toUnsigned(64);
+    }
+    final v = hash.toUnsigned(64).toRadixString(16).padLeft(16, '0');
+    return v;
+  }
+
+  void _noteLogLineSeen(String line) {
+    final h = _fnv1a64Hex(line);
+    _logLastLineHash = h;
+    if (_hashSaveTimer != null) return;
+    _hashSaveTimer = Timer(const Duration(milliseconds: 400), () {
+      _hashSaveTimer = null;
+      final hash = _logLastLineHash;
+      _hashSaveQueue = _hashSaveQueue.then((_) async {
+        try {
+          await _sessionStore.saveLogLastLineHash(
+            targetKey: target.targetKey,
+            projectPath: projectPath,
+            tabId: tabId,
+            hash: hash,
+          );
+        } catch (_) {}
+      });
+    });
+  }
+
   void _flushLogLineCursor() {
     try {
       _cursorSaveTimer?.cancel();
@@ -983,6 +1057,25 @@ class SessionController extends SessionControllerBase {
           projectPath: projectPath,
           tabId: tabId,
           cursor: cursor,
+        );
+      } catch (_) {}
+    });
+  }
+
+  void _flushLogLastLineHash() {
+    try {
+      _hashSaveTimer?.cancel();
+    } catch (_) {}
+    _hashSaveTimer = null;
+    final hash = _logLastLineHash;
+    if (hash.trim().isEmpty) return;
+    _hashSaveQueue = _hashSaveQueue.then((_) async {
+      try {
+        await _sessionStore.saveLogLastLineHash(
+          targetKey: target.targetKey,
+          projectPath: projectPath,
+          tabId: tabId,
+          hash: hash,
         );
       } catch (_) {}
     });
@@ -1302,19 +1395,14 @@ class SessionController extends SessionControllerBase {
       await file.create(recursive: true);
     }
 
-    int currentLines = 0;
-    try {
-      currentLines = await _localLineCount(path: logPath);
-    } catch (_) {}
-    final start = _computeLogStartLine(
-      currentLines: currentLines,
-      backfillLines: backfillLines,
-      startAtLine: startAtLine,
-    );
+    // We handle resume/catch-up separately; start tails from end to avoid
+    // re-streaming old logs (which can cause duplicates and scroll jumps).
+    final start = startAtLine ?? 0;
 
     final proc = _localShell.startCommand(
       executable: 'tail',
-      arguments: ['-n', '+$start', '-F', logPath],
+      arguments:
+          start > 0 ? ['-n', '+$start', '-F', logPath] : ['-n', '0', '-F', logPath],
       workingDirectory: projectPath,
     );
     final token = Object();
@@ -1323,6 +1411,7 @@ class SessionController extends SessionControllerBase {
 
     _localTailStdoutSub = proc.stdoutLines.listen((line) {
       if (line.trim().isEmpty) return;
+      _noteLogLineSeen(line);
       _bumpLogLineCursor();
       if (!_shouldProcessLogLine(line)) return;
       _tailQueue = _tailQueue.then((_) async {
@@ -1354,80 +1443,69 @@ class SessionController extends SessionControllerBase {
     final file = File(logPath);
     if (!await file.exists()) return;
 
-    int currentLines = 0;
-    try {
-      currentLines = await _localLineCount(path: logPath);
-    } catch (_) {}
-    final start = _computeLogStartLine(
-      currentLines: currentLines,
-      backfillLines: backfillLines,
-      startAtLine: null,
+    // Bounded catch-up: read a window from the end, then only apply lines
+    // after the last seen hash (prevents replaying the entire log repeatedly).
+    const window = 8000;
+    final res = await Process.run(
+      '/bin/sh',
+      ['-c', 'tail -n $window ${_shQuote(logPath)} 2>/dev/null || true'],
     );
+    final stdout = (res.stdout as Object?)?.toString() ?? '';
+    final lines = const LineSplitter().convert(stdout);
+    if (lines.isEmpty) return;
 
-    LocalCommandProcess? proc;
-    StreamSubscription<String>? outSub;
-    StreamSubscription<String>? errSub;
-    try {
-      proc = _localShell.startCommand(
-        executable: 'tail',
-        arguments: ['-n', '+$start', logPath],
-        workingDirectory: projectPath,
-      );
+    var startIndex = 0;
+    final last = _logLastLineHash.trim();
+    if (last.isNotEmpty) {
+      for (var i = lines.length - 1; i >= 0; i--) {
+        if (_fnv1a64Hex(lines[i]) == last) {
+          startIndex = i + 1;
+          break;
+        }
+      }
+    } else {
+      startIndex = (lines.length - backfillLines).clamp(0, lines.length);
+    }
 
-      outSub = proc.stdoutLines.listen((line) {
-        if (line.trim().isEmpty) return;
-        _bumpLogLineCursor();
-        if (!_shouldProcessLogLine(line)) return;
-        _tailQueue = _tailQueue.then((_) async {
-          try {
-            final decoded = jsonDecode(line);
-            if (decoded is Map) {
-              await _handleCodexJsonEvent(decoded.cast<String, Object?>());
-            }
-          } catch (_) {}
-        });
+    for (final line in lines.skip(startIndex)) {
+      if (line.trim().isEmpty) continue;
+      _noteLogLineSeen(line);
+      if (!_shouldProcessLogLine(line)) continue;
+      _tailQueue = _tailQueue.then((_) async {
+        try {
+          final decoded = jsonDecode(line);
+          if (decoded is Map) {
+            await _handleCodexJsonEvent(decoded.cast<String, Object?>());
+          }
+        } catch (_) {}
       });
-
-      errSub = proc.stderrLines.listen((line) {
-        if (line.trim().isEmpty) return;
-        _insertEvent(type: 'catchup_stderr', text: line);
-      });
-
-      await proc.done;
-    } finally {
-      try {
-        await outSub?.cancel();
-      } catch (_) {}
-      try {
-        await errSub?.cancel();
-      } catch (_) {}
-      try {
-        proc?.cancel();
-      } catch (_) {}
     }
   }
 
   void _rememberRecentLogLine(String line) {
-    // Keep a small LRU-ish window of raw JSONL lines to suppress duplicates
-    // when reattaching the tail after sleep/background.
-    if (_recentLogLineSet.contains(line)) return;
-    _recentLogLines.add(line);
-    _recentLogLineSet.add(line);
-    const max = 400;
-    if (_recentLogLines.length > max) {
-      final removed = _recentLogLines.removeAt(0);
-      _recentLogLineSet.remove(removed);
+    // Keep an LRU-ish window of hashes to suppress duplicates when reattaching
+    // the tail after sleep/background. Hashes avoid holding large strings.
+    final h = _fnv1a64Hex(line);
+    if (_recentLogLineHashSet.contains(h)) return;
+    _recentLogLineHashes.add(h);
+    _recentLogLineHashSet.add(h);
+    const max = 20000;
+    if (_recentLogLineHashes.length > max) {
+      final removed = _recentLogLineHashes.removeAt(0);
+      _recentLogLineHashSet.remove(removed);
     }
   }
 
   bool _shouldProcessLogLine(String line) {
-    if (_recentLogLineSet.contains(line)) return false;
+    final h = _fnv1a64Hex(line);
+    if (_recentLogLineHashSet.contains(h)) return false;
     _rememberRecentLogLine(line);
     return true;
   }
 
   void _onAppBackgrounded() {
     _flushLogLineCursor();
+    _flushLogLastLineHash();
     // Avoid holding a long-lived SSH connection open while backgrounded.
     // The remote job continues in tmux/nohup; we can reattach on resume.
     if (!target.local) _cancelTailOnly();
@@ -1453,7 +1531,11 @@ class SessionController extends SessionControllerBase {
     await reattachIfNeeded(backfillLines: 200);
   }
 
-  Future<void> _runCodexTurn({required String prompt}) async {
+  Future<void> _runCodexTurn({
+    required String prompt,
+    required String userMessageId,
+    required DateTime userMessageCreatedAt,
+  }) async {
     if (isRunning.value) return;
 
     if (target.local) {
@@ -1463,6 +1545,13 @@ class SessionController extends SessionControllerBase {
       try {
         await _ensureFieldExecDirsLocal();
         await _ensureSchema(schemaContents: CodexOutputSchema.encode());
+        await _appendClientJsonlToLog(
+          jsonlLine: _clientUserMessageJsonlLine(
+            messageId: userMessageId,
+            text: prompt,
+            createdAtMsUtc: userMessageCreatedAt.millisecondsSinceEpoch,
+          ),
+        );
         final combinedDev = await _localDeveloperInstructionsCombined();
 
         final cmd = CodexCommandBuilder.build(
@@ -1493,14 +1582,23 @@ class SessionController extends SessionControllerBase {
       return;
     }
 
-    await _runRemoteViaTmux(prompt: prompt);
+    await _runRemoteViaTmux(
+      prompt: prompt,
+      userMessageId: userMessageId,
+      userMessageCreatedAt: userMessageCreatedAt,
+    );
   }
 
-  String _clientUserMessageJsonlLine(String text) {
+  String _clientUserMessageJsonlLine({
+    required String messageId,
+    required String text,
+    required int createdAtMsUtc,
+  }) {
     final payload = <String, Object?>{
       'type': _clientUserMessageType,
+      'message_id': messageId,
       'text': text,
-      'created_at_ms_utc': DateTime.now().toUtc().millisecondsSinceEpoch,
+      'created_at_ms_utc': createdAtMsUtc,
     };
     final currentThread = threadId.value;
     if (currentThread != null && currentThread.isNotEmpty) {
@@ -1546,13 +1644,19 @@ class SessionController extends SessionControllerBase {
   Future<void> _appendRemoteUserMessageToLog({
     required String prompt,
     required String logAbsPath,
+    required String userMessageId,
+    required DateTime userMessageCreatedAt,
   }) async {
     final profile = target.profile!;
     final pem = await _storage.read(
       key: SecureStorageService.sshPrivateKeyPemKey,
     );
 
-    final line = _clientUserMessageJsonlLine(prompt);
+    final line = _clientUserMessageJsonlLine(
+      messageId: userMessageId,
+      text: prompt,
+      createdAtMsUtc: userMessageCreatedAt.millisecondsSinceEpoch,
+    );
     final cmd = 'printf %s\\\\n ${_shQuote(line)} >> ${_shQuote(logAbsPath)}';
     await _ssh.runCommandWithResult(
       host: profile.host,
@@ -1631,7 +1735,11 @@ class SessionController extends SessionControllerBase {
     );
   }
 
-  Future<void> _runRemoteViaTmux({required String prompt}) async {
+  Future<void> _runRemoteViaTmux({
+    required String prompt,
+    required String userMessageId,
+    required DateTime userMessageCreatedAt,
+  }) async {
     if (isRunning.value) return;
     isRunning.value = true;
     thinkingPreview.value = null;
@@ -1706,7 +1814,12 @@ class SessionController extends SessionControllerBase {
 
       // Persist the user prompt into the JSONL log so rehydration can show it and
       // so the remote job can read it back as stdin without creating temp files.
-      await _appendRemoteUserMessageToLog(prompt: prompt, logAbsPath: logAbs);
+      await _appendRemoteUserMessageToLog(
+        prompt: prompt,
+        logAbsPath: logAbs,
+        userMessageId: userMessageId,
+        userMessageCreatedAt: userMessageCreatedAt,
+      );
 
       final codexArgsTail = CodexCommandBuilder.shellString(
         cmd.args.sublist(1),
@@ -2072,19 +2185,15 @@ class SessionController extends SessionControllerBase {
 
     final logAbs = _remoteAbsPath(_logRelPath);
 
-    int currentLines = 0;
-    try {
-      currentLines = await _remoteLineCount(absPath: logAbs);
-    } catch (_) {}
-    final startLine = _computeLogStartLine(
-      currentLines: currentLines,
-      backfillLines: backfillLines,
-      startAtLine: startAtLine,
-    );
+    // We handle resume/catch-up separately; start tails from end by default to
+    // avoid re-streaming old logs (which can cause duplicates and scroll jumps).
+    final startLine = startAtLine ?? 0;
 
     final cmd = _wrapWithShell(
       profile,
-      'tail -n +$startLine -F ${_shQuote(logAbs)}',
+      startLine > 0
+          ? 'tail -n +$startLine -F ${_shQuote(logAbs)}'
+          : 'tail -n 0 -F ${_shQuote(logAbs)}',
     );
     final proc = await startProc(cmd);
     final token = Object();
@@ -2093,6 +2202,7 @@ class SessionController extends SessionControllerBase {
 
     _tailStdoutSub = proc.stdoutLines.listen((line) {
       if (line.trim().isEmpty) return;
+      _noteLogLineSeen(line);
       _bumpLogLineCursor();
       if (!_shouldProcessLogLine(line)) return;
       _tailQueue = _tailQueue.then((_) async {
@@ -2134,87 +2244,60 @@ class SessionController extends SessionControllerBase {
     );
     if (pem == null || pem.trim().isEmpty) return;
 
-    Future<SshCommandProcess> startProc(String cmd) async {
-      try {
-        return await _ssh.startCommand(
-          host: profile.host,
-          port: profile.port,
-          username: profile.username,
-          privateKeyPem: pem,
-          password: _sshPassword,
-          command: cmd,
-        );
-      } catch (_) {
-        if (_sshPassword == null) {
-          final pw = await _promptForPassword();
-          if (pw == null || pw.isEmpty) rethrow;
-          _sshPassword = pw;
-          return _ssh.startCommand(
-            host: profile.host,
-            port: profile.port,
-            username: profile.username,
-            privateKeyPem: pem,
-            password: _sshPassword,
-            command: cmd,
-          );
-        }
-        rethrow;
-      }
-    }
-
+    // Bounded catch-up: read a window from the end, then only apply lines after
+    // the last seen hash. This avoids expensive full-log scans and prevents
+    // re-inserting the entire log repeatedly on flaky resumes.
+    const window = 8000;
     final logAbs = _remoteAbsPath(_logRelPath);
-    int currentLines = 0;
-    try {
-      currentLines = await _remoteLineCount(absPath: logAbs);
-    } catch (_) {}
-    final startLine = _computeLogStartLine(
-      currentLines: currentLines,
-      backfillLines: backfillLines,
-      startAtLine: null,
-    );
-
     final cmdBody = [
       'if [ -f ${_shQuote(logAbs)} ]; then',
-      '  tail -n +$startLine ${_shQuote(logAbs)} 2>/dev/null || true',
+      '  tail -n $window ${_shQuote(logAbs)} 2>/dev/null || true',
       'fi',
     ].join('\n');
 
-    SshCommandProcess? proc;
-    StreamSubscription<String>? outSub;
-    StreamSubscription<String>? errSub;
+    SshCommandResult res;
     try {
-      proc = await startProc(_wrapWithShell(profile, cmdBody));
+      res = await _ssh.runCommandWithResult(
+        host: profile.host,
+        port: profile.port,
+        username: profile.username,
+        privateKeyPem: pem,
+        password: _sshPassword,
+        command: _wrapWithShell(profile, cmdBody),
+      );
+    } catch (_) {
+      // Best-effort: if we can't catch up, we still reattach the live tail.
+      return;
+    }
 
-      outSub = proc.stdoutLines.listen((line) {
-        if (line.trim().isEmpty) return;
-        _bumpLogLineCursor();
-        if (!_shouldProcessLogLine(line)) return;
-        _tailQueue = _tailQueue.then((_) async {
-          try {
-            final decoded = jsonDecode(line);
-            if (decoded is Map) {
-              await _handleCodexJsonEvent(decoded.cast<String, Object?>());
-            }
-          } catch (_) {}
-        });
+    final lines = const LineSplitter().convert(res.stdout);
+    if (lines.isEmpty) return;
+
+    var startIndex = 0;
+    final last = _logLastLineHash.trim();
+    if (last.isNotEmpty) {
+      for (var i = lines.length - 1; i >= 0; i--) {
+        if (_fnv1a64Hex(lines[i]) == last) {
+          startIndex = i + 1;
+          break;
+        }
+      }
+    } else {
+      startIndex = (lines.length - backfillLines).clamp(0, lines.length);
+    }
+
+    for (final line in lines.skip(startIndex)) {
+      if (line.trim().isEmpty) continue;
+      _noteLogLineSeen(line);
+      if (!_shouldProcessLogLine(line)) continue;
+      _tailQueue = _tailQueue.then((_) async {
+        try {
+          final decoded = jsonDecode(line);
+          if (decoded is Map) {
+            await _handleCodexJsonEvent(decoded.cast<String, Object?>());
+          }
+        } catch (_) {}
       });
-
-      errSub = proc.stderrLines.listen((line) {
-        if (line.trim().isEmpty) return;
-        _insertEvent(type: 'catchup_stderr', text: line);
-      });
-
-      await proc.done;
-    } finally {
-      try {
-        await outSub?.cancel();
-      } catch (_) {}
-      try {
-        await errSub?.cancel();
-      } catch (_) {}
-      try {
-        proc?.cancel();
-      } catch (_) {}
     }
   }
 
@@ -2743,6 +2826,7 @@ class SessionController extends SessionControllerBase {
       _historyRemoteStartLine = tailStartLine;
       hasMoreHistory.value = tailStartLine > 1;
 
+      final wasEmpty = chatController.messages.isEmpty;
       _pendingActionsMessage = null;
       final backfill = <Message>[
         _eventMessage(
@@ -2766,6 +2850,9 @@ class SessionController extends SessionControllerBase {
       }
 
       await chatController.setMessages(backfill, animated: false);
+      if (wasEmpty && backfill.isNotEmpty) {
+        _needsScrollToBottom.value = true;
+      }
       await _maybeCatchUpAutoCommitFromHydratedLog(lines: lines, startIndex: 0);
     } catch (_) {
       // Best-effort.
@@ -3100,6 +3187,7 @@ class SessionController extends SessionControllerBase {
     hasMoreHistory.value = focusThreadId != null && foundThreadStart
         ? false
         : (tailStartIndex + start) > 0;
+    final wasEmpty = chatController.messages.isEmpty;
     _pendingActionsMessage = null;
     final backfill = <Message>[
       _eventMessage(
@@ -3123,6 +3211,9 @@ class SessionController extends SessionControllerBase {
     }
 
     await chatController.setMessages(backfill, animated: false);
+    if (wasEmpty && backfill.isNotEmpty) {
+      _needsScrollToBottom.value = true;
+    }
     await _maybeCatchUpAutoCommitFromHydratedLog(
       lines: tail,
       startIndex: start,
@@ -3256,6 +3347,21 @@ class SessionController extends SessionControllerBase {
   Future<void> _handleCodexJsonEvent(Map<String, Object?> event) async {
     final type = event['type'] as String?;
     if (type == null || type.isEmpty) return;
+
+    // Safety valve: if something goes wrong with cursoring/deduping, the chat
+    // list can explode to tens of thousands of messages, which also tends to
+    // make the view jump around. When that happens, rebuild from the log tail.
+    if (!_repairedExplodedChat && chatController.messages.length > 8000) {
+      _repairedExplodedChat = true;
+      try {
+        if (target.local) {
+          await _rehydrateFromLocalLog(maxLines: 300, logRelPath: _logRelPath);
+        } else {
+          await _rehydrateFromRemoteLog(maxLines: 300);
+        }
+      } catch (_) {}
+      return;
+    }
 
     // Prompts are inserted into chat immediately; keep them out of the live
     // stream to avoid duplicates. Rehydration renders them from the log instead.
@@ -3542,13 +3648,18 @@ class SessionController extends SessionControllerBase {
 
     if (type == _clientUserMessageType) {
       final text = event['text']?.toString() ?? '';
+      final messageId = event['message_id']?.toString().trim() ?? '';
       final createdAtMs = event['created_at_ms_utc'];
       final createdAt = createdAtMs is int
           ? DateTime.fromMillisecondsSinceEpoch(createdAtMs, isUtc: true)
           : DateTime.now().toUtc();
+      if (messageId.isNotEmpty &&
+          chatController.messages.any((m) => m.id == messageId)) {
+        return const [];
+      }
       return [
         Message.text(
-          id: _uuid.v4(),
+          id: messageId.isNotEmpty ? messageId : _uuid.v4(),
           authorId: _me,
           createdAt: createdAt,
           text: text,
