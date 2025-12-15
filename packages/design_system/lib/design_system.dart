@@ -1,5 +1,6 @@
 export 'src/models/connection_profile.dart';
 export 'src/models/conversation.dart';
+export 'src/models/local_ssh_key_candidate.dart';
 export 'src/models/project.dart';
 export 'src/models/project_tab.dart';
 

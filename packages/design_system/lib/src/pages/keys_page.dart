@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
@@ -15,6 +17,77 @@ class KeysPage extends GetView<KeysControllerBase> {
         child: ListView(
           padding: const EdgeInsets.all(16),
           children: [
+            if (Platform.isMacOS || Platform.isLinux) ...[
+              Row(
+                children: [
+                  const Expanded(
+                    child: Text(
+                      'Use Key From ~/.ssh',
+                      style: TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                  ),
+                  Obx(
+                    () => IconButton(
+                      tooltip: 'Rescan',
+                      onPressed:
+                          (controller.busy.value ||
+                              controller.scanningLocalKeys.value)
+                          ? null
+                          : controller.scanLocalKeys,
+                      icon: controller.scanningLocalKeys.value
+                          ? const SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.refresh),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              const Text(
+                'Pick an existing SSH private key. Passphrase-protected keys may not work yet.',
+              ),
+              const SizedBox(height: 8),
+              Obx(() {
+                final items = controller.localKeyCandidates;
+                if (controller.scanningLocalKeys.value) {
+                  return const SizedBox.shrink();
+                }
+                if (items.isEmpty) {
+                  return const Text('No SSH private keys found in ~/.ssh.');
+                }
+                return Column(
+                  children: [
+                    for (final k in items)
+                      ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        leading: Icon(
+                          k.looksEncrypted ? Icons.lock : Icons.key,
+                        ),
+                        title: Text(k.filename),
+                        subtitle: Text(k.path),
+                        trailing: FilledButton(
+                          onPressed: controller.busy.value
+                              ? null
+                              : () async {
+                                  controller.busy.value = true;
+                                  try {
+                                    await controller.useLocalKey(k);
+                                  } finally {
+                                    controller.busy.value = false;
+                                  }
+                                },
+                          child: const Text('Use'),
+                        ),
+                      ),
+                    const Divider(),
+                  ],
+                );
+              }),
+              const SizedBox(height: 12),
+            ],
             const Text(
               'Global Private Key (PEM)',
               style: TextStyle(fontWeight: FontWeight.w600),
@@ -119,4 +192,3 @@ class KeysPage extends GetView<KeysControllerBase> {
     );
   }
 }
-
