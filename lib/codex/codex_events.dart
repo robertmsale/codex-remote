@@ -26,8 +26,8 @@ class CodexStructuredImageRef {
 
   factory CodexStructuredImageRef.fromJson(Map<String, Object?> json) {
     return CodexStructuredImageRef(
-      path: (json['path'] as String?) ?? '',
-      caption: (json['caption'] as String?) ?? '',
+      path: json['path']?.toString() ?? '',
+      caption: json['caption']?.toString() ?? '',
     );
   }
 }

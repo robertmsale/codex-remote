@@ -49,7 +49,10 @@ abstract final class CodexOutputSchema {
               'description': 'Optional short caption shown under the image.',
             },
           },
-          'required': ['path', 'caption'],
+          // Caption is intentionally optional: requiring it makes the schema
+          // brittle (models may omit it when returning many images), which can
+          // lead to the entire `images` array being dropped.
+          'required': ['path'],
           'additionalProperties': false,
         },
       },
