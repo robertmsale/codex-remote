@@ -19,7 +19,6 @@ enum _ProjectMenuAction {
   resumeConversation,
   git,
   developerInstructions,
-  switchTo,
 }
 
 class ProjectSessionsPage extends StatefulWidget {
@@ -134,9 +133,6 @@ class _ProjectSessionsPageState extends State<ProjectSessionsPage>
         return;
       case _ProjectMenuAction.developerInstructions:
         await _editDeveloperInstructions();
-        return;
-      case _ProjectMenuAction.switchTo:
-        await _switchToProjectInGroup();
         return;
     }
   }
@@ -280,19 +276,16 @@ class _ProjectSessionsPageState extends State<ProjectSessionsPage>
       appBar: AppBar(
         title: Text(controller.args.project.name),
         actions: [
+          IconButton(
+            tooltip: 'Switch project',
+            onPressed: () => unawaited(_switchToProjectInGroup()),
+            icon: const Icon(Icons.swap_horiz),
+          ),
           PopupMenuButton<_ProjectMenuAction>(
             tooltip: 'Project menu',
             icon: const Icon(Icons.settings),
             onSelected: (a) => unawaited(_handleMenu(a)),
             itemBuilder: (_) => const [
-              PopupMenuItem<_ProjectMenuAction>(
-                value: _ProjectMenuAction.switchTo,
-                child: ListTile(
-                  dense: true,
-                  leading: Icon(Icons.swap_horiz, size: 18),
-                  title: Text('Switch to…'),
-                ),
-              ),
               PopupMenuItem<_ProjectMenuAction>(
                 value: _ProjectMenuAction.developerInstructions,
                 child: ListTile(

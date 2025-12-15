@@ -166,6 +166,16 @@ class ProjectSessionsController extends ProjectSessionsControllerBase {
     if (tabs.length <= 1) {
       final session = sessionForTab(tab);
       await session.resetSession();
+      await session.clearSessionArtifacts();
+
+      // Make it obvious that closing the last tab "did something".
+      tabs[0] = ProjectTab(id: tab.id, title: 'New tab');
+      activeIndex.value = 0;
+      await _tabsStore.saveTabs(
+        targetKey: args.target.targetKey,
+        projectPath: args.project.path,
+        tabs: tabs.toList(growable: false),
+      );
       return;
     }
 

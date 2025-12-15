@@ -22,5 +22,6 @@ abstract class SessionControllerBase extends GetxController {
   Future<void> loadMoreHistory();
   Future<void> loadImageAttachment(CustomMessage message, {int? index});
   Future<void> resetSession();
+  Future<void> clearSessionArtifacts();
   void stop();
 }

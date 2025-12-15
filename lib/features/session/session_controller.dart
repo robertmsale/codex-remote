@@ -499,6 +499,106 @@ class SessionController extends SessionControllerBase {
   }
 
   @override
+  Future<void> clearSessionArtifacts() async {
+    // Clear persisted keys first so an app restart won't "reattach" to this tab.
+    try {
+      await _sessionStore.clearThreadId(
+        targetKey: target.targetKey,
+        projectPath: projectPath,
+        tabId: tabId,
+      );
+    } catch (_) {}
+    try {
+      await _sessionStore.clearRemoteJobId(
+        targetKey: target.targetKey,
+        projectPath: projectPath,
+        tabId: tabId,
+      );
+    } catch (_) {}
+    try {
+      await _sessionStore.clearRemoteTmuxSessionName(
+        targetKey: target.targetKey,
+        projectPath: projectPath,
+        tabId: tabId,
+      );
+    } catch (_) {}
+    try {
+      await _sessionStore.clearLogLineCursor(
+        targetKey: target.targetKey,
+        projectPath: projectPath,
+        tabId: tabId,
+      );
+    } catch (_) {}
+    _logLineCursor = 0;
+
+    hasMoreHistory.value = false;
+    isLoadingMoreHistory.value = false;
+    _historyLogRelPath = null;
+    _historyFocusThreadId = null;
+    _historyRemoteStartLine = null;
+    _historyLocalStartIndex = null;
+
+    if (target.local) {
+      Future<void> rmRel(String rel) async {
+        try {
+          final p = _joinPosix(projectPath, rel);
+          final f = File(p);
+          if (await f.exists()) await f.delete();
+        } catch (_) {}
+      }
+
+      await rmRel(_logRelPath);
+      await rmRel(_stderrLogRelPath);
+      await rmRel(_jobRelPath);
+      await rmRel(_pidRelPath);
+      return;
+    }
+
+    final profile = target.profile;
+    if (profile == null) return;
+    final pem = await _storage.read(
+      key: SecureStorageService.sshPrivateKeyPemKey,
+    );
+    if (pem == null || pem.trim().isEmpty) return;
+
+    final logAbs = _remoteAbsPath(_logRelPath);
+    final stderrAbs = _remoteAbsPath(_stderrLogRelPath);
+    final jobAbs = _remoteAbsPath(_jobRelPath);
+    final pidAbs = _remoteAbsPath(_pidRelPath);
+
+    final cmdBody = [
+      'rm -f ${_shQuote(logAbs)} ${_shQuote(stderrAbs)} ${_shQuote(jobAbs)} ${_shQuote(pidAbs)} 2>/dev/null || true',
+    ].join('\n');
+
+    try {
+      await _ssh.runCommandWithResult(
+        host: profile.host,
+        port: profile.port,
+        username: profile.username,
+        privateKeyPem: pem,
+        password: _sshPassword,
+        command: _wrapWithShell(profile, cmdBody),
+      );
+    } catch (_) {
+      if (_sshPassword == null) {
+        try {
+          final pw = await _promptForPassword();
+          if (pw == null || pw.isEmpty) return;
+          _sshPassword = pw;
+          await _ssh.runCommandWithResult(
+            host: profile.host,
+            port: profile.port,
+            username: profile.username,
+            privateKeyPem: pem,
+            password: _sshPassword,
+            command: _wrapWithShell(profile, cmdBody),
+          );
+        } catch (_) {}
+      }
+    }
+  }
+
+  @override
   Future<void> loadImageAttachment(CustomMessage message, {int? index}) async {
     final meta = message.metadata ?? const {};
     final kind = meta['kind']?.toString();

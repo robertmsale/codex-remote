@@ -1170,6 +1170,9 @@ class MockSessionController extends SessionControllerBase {
   }
 
   @override
+  Future<void> clearSessionArtifacts() async {}
+
+  @override
   void stop() {
     isRunning.value = false;
   }
