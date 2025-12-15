@@ -97,6 +97,7 @@ class SessionController extends SessionControllerBase {
   Worker? _activeWorker;
   final _recentLogLineHashes = <String>[];
   final _recentLogLineHashSet = <String>{};
+  final _seenAgentMessageItemIds = <String>{};
   var _autoCommitCatchUpInProgress = false;
 
   SessionController({
@@ -1153,10 +1154,49 @@ class SessionController extends SessionControllerBase {
         }
       }
 
-      if (remoteJobId.value == null || remoteJobId.value!.isEmpty) return;
-
       await _rehydrateFromLocalLog(maxLines: 200, logRelPath: _logRelPath);
-      await reattachIfNeeded(backfillLines: 0);
+      // If the job finished while the app was backgrounded/terminated, we may
+      // have missed >200 lines; replay any unseen log lines using the cursor.
+      try {
+        await _catchUpFromLocalLogOnce(backfillLines: 200);
+      } catch (_) {}
+
+      final stored = remoteJobId.value;
+      if (stored == null || stored.isEmpty) return;
+
+      // Optimistically mark as running right away so we don't accidentally start
+      // a new turn and kill the existing local job before we finish checking.
+      isRunning.value = true;
+      _cancelCurrent = () {
+        _stopLocalJob(stored).whenComplete(() {
+          _cancelLocalTailOnly();
+          _cancelCurrent = null;
+          isRunning.value = false;
+          thinkingPreview.value = null;
+        });
+      };
+
+      final alive = await _isLocalJobAlive(stored);
+      if (alive) {
+        await _startLocalLogTailIfNeeded(backfillLines: 200);
+      } else {
+        try {
+          await _sessionStore.clearRemoteJobId(
+            targetKey: target.targetKey,
+            projectPath: projectPath,
+            tabId: tabId,
+          );
+        } catch (_) {}
+        try {
+          final file = File(_joinPosix(projectPath, _jobRelPath));
+          if (await file.exists()) await file.writeAsString('', flush: true);
+        } catch (_) {}
+        _remoteJobId = null;
+        remoteJobId.value = null;
+        _cancelCurrent = null;
+        isRunning.value = false;
+        thinkingPreview.value = null;
+      }
     } catch (_) {
       // Best-effort.
     }
@@ -1319,31 +1359,6 @@ class SessionController extends SessionControllerBase {
     await run(_wrapWithShell(profile, cmd));
   }
 
-  static String _sanitizeDevInstructions(String s) {
-    // Avoid delimiter collisions with TOML multiline literal strings (''' ... ''').
-    return s.replaceAll("'''", "''’").replaceAll('\r', '');
-  }
-
-  Future<String> _localDeveloperInstructionsCombined() async {
-    final file = File(_joinPosix(projectPath, _devInstructionsRelPath));
-    await file.parent.create(recursive: true);
-    if (!await file.exists()) {
-      await file.writeAsString('', flush: true);
-    }
-    final raw = await file.readAsString();
-    final projectText = _sanitizeDevInstructions(raw).trimRight();
-    if (projectText.isEmpty) {
-      return CodexCommandBuilder.defaultDeveloperInstructions;
-    }
-    return [
-      CodexCommandBuilder.defaultDeveloperInstructions.trimRight(),
-      '',
-      '# Project developer instructions (.field_exec/developer_instructions.txt)',
-      projectText,
-      '',
-    ].join('\n');
-  }
-
   void _cancelTailOnly() {
     _tailToken = null;
     try {
@@ -1387,36 +1402,6 @@ class SessionController extends SessionControllerBase {
     }
   }
 
-  int _computeLogStartLine({
-    required int currentLines,
-    required int backfillLines,
-    int? startAtLine,
-  }) {
-    int start = startAtLine ?? 0;
-    if (start <= 0) {
-      // If the log was truncated/rewritten since we last tailed it, reset to a
-      // reasonable backfill window; otherwise continue from the last cursor.
-      if (_logLineCursor > 0 && _logLineCursor > currentLines) {
-        start = (currentLines - backfillLines + 1).clamp(
-          1,
-          currentLines == 0 ? 1 : currentLines,
-        );
-        _logLineCursor = start - 1;
-      } else if (_logLineCursor > 0) {
-        start = _logLineCursor + 1;
-      } else {
-        start = (currentLines - backfillLines + 1).clamp(
-          1,
-          currentLines == 0 ? 1 : currentLines,
-        );
-        _logLineCursor = start - 1;
-      }
-    } else {
-      _logLineCursor = start - 1;
-    }
-    return start;
-  }
-
   Future<void> _startLocalLogTailIfNeeded({
     int? startAtLine,
     int backfillLines = 200,
@@ -1435,8 +1420,9 @@ class SessionController extends SessionControllerBase {
 
     final proc = _localShell.startCommand(
       executable: 'tail',
-      arguments:
-          start > 0 ? ['-n', '+$start', '-F', logPath] : ['-n', '0', '-F', logPath],
+      arguments: start > 0
+          ? ['-n', '+$start', '-F', logPath]
+          : ['-n', '0', '-F', logPath],
       workingDirectory: projectPath,
     );
     final token = Object();
@@ -1480,10 +1466,10 @@ class SessionController extends SessionControllerBase {
     // Bounded catch-up: read a window from the end, then only apply lines
     // after the last seen hash (prevents replaying the entire log repeatedly).
     const window = 8000;
-    final res = await Process.run(
-      '/bin/sh',
-      ['-c', 'tail -n $window ${_shQuote(logPath)} 2>/dev/null || true'],
-    );
+    final res = await Process.run('/bin/sh', [
+      '-c',
+      'tail -n $window ${_shQuote(logPath)} 2>/dev/null || true',
+    ]);
     final stdout = (res.stdout as Object?)?.toString() ?? '';
     final lines = const LineSplitter().convert(stdout);
     if (lines.isEmpty) return;
@@ -1573,46 +1559,11 @@ class SessionController extends SessionControllerBase {
     if (isRunning.value) return;
 
     if (target.local) {
-      isRunning.value = true;
-      thinkingPreview.value = null;
-      _cancelCurrent = null;
-      try {
-        await _ensureFieldExecDirsLocal();
-        await _ensureSchema(schemaContents: CodexOutputSchema.encode());
-        await _appendClientJsonlToLog(
-          jsonlLine: _clientUserMessageJsonlLine(
-            messageId: userMessageId,
-            text: prompt,
-            createdAtMsUtc: userMessageCreatedAt.millisecondsSinceEpoch,
-          ),
-        );
-        final combinedDev = await _localDeveloperInstructionsCombined();
-
-        final cmd = CodexCommandBuilder.build(
-          prompt: prompt,
-          schemaPath: _schemaRelPath,
-          resumeThreadId: threadId.value,
-          jsonl: true,
-          cd: null,
-          configOverrides: {
-            'developer_instructions': CodexCommandBuilder.tomlString(
-              combinedDev,
-            ),
-          },
-        );
-
-        await _insertEvent(
-          type: 'command_execution',
-          text:
-              'Running locally: codex ${CodexCommandBuilder.shellString(cmd.args)}',
-        );
-
-        await _runLocal(cmd);
-      } finally {
-        _cancelCurrent = null;
-        isRunning.value = false;
-        thinkingPreview.value = null;
-      }
+      await _runLocalViaTmux(
+        prompt: prompt,
+        userMessageId: userMessageId,
+        userMessageCreatedAt: userMessageCreatedAt,
+      );
       return;
     }
 
@@ -1745,28 +1696,257 @@ class SessionController extends SessionControllerBase {
     }
   }
 
-  Future<void> _runLocal(CodexCommand cmd) async {
-    final proc = _localShell.startCommand(
-      executable: 'codex',
-      arguments: cmd.args,
-      workingDirectory: projectPath,
-      stdin: cmd.stdin,
-    );
-    _cancelCurrent = proc.cancel;
+  Future<void> _runLocalViaTmux({
+    required String prompt,
+    required String userMessageId,
+    required DateTime userMessageCreatedAt,
+  }) async {
+    if (isRunning.value) return;
+    isRunning.value = true;
+    thinkingPreview.value = null;
+    _cancelCurrent = () {
+      final job = _remoteJobId ?? remoteJobId.value;
+      if (job != null && job.isNotEmpty) {
+        _stopLocalJob(job).whenComplete(() async {
+          _cancelLocalTailOnly();
+          _cancelCurrent = null;
+          isRunning.value = false;
+          thinkingPreview.value = null;
+          _remoteJobId = null;
+          remoteJobId.value = null;
+          try {
+            await _sessionStore.clearRemoteJobId(
+              targetKey: target.targetKey,
+              projectPath: projectPath,
+              tabId: tabId,
+            );
+          } catch (_) {}
+        });
+        return;
+      }
+      _cancelLocalTailOnly();
+      isRunning.value = false;
+      thinkingPreview.value = null;
+      _cancelCurrent = null;
+    };
 
-    await _consumeCodexStreams(
-      stdoutJsonl: proc.stdoutLines
-          .map((l) {
-            try {
-              final decoded = jsonDecode(l);
-              if (decoded is Map) return decoded.cast<String, Object?>();
-            } catch (_) {}
-            return <String, Object?>{};
-          })
-          .where((m) => m.isNotEmpty),
-      stderrLines: proc.stderrLines,
-      onExit: proc.done,
-    );
+    try {
+      await _ensureFieldExecDirsLocal();
+      await _ensureSchema(schemaContents: CodexOutputSchema.encode());
+
+      final logAbs = _joinPosix(projectPath, _logRelPath);
+      final errAbs = _joinPosix(projectPath, _stderrLogRelPath);
+      final pidAbs = _joinPosix(projectPath, _pidRelPath);
+      final jobAbs = _joinPosix(projectPath, _jobRelPath);
+
+      await _appendClientJsonlToLog(
+        jsonlLine: _clientUserMessageJsonlLine(
+          messageId: userMessageId,
+          text: prompt,
+          createdAtMsUtc: userMessageCreatedAt.millisecondsSinceEpoch,
+        ),
+      );
+
+      final cmd = CodexCommandBuilder.build(
+        prompt: prompt,
+        schemaPath: _schemaRelPath,
+        resumeThreadId: threadId.value,
+        jsonl: true,
+        cd: null,
+        configOverrides: const {},
+      );
+
+      await _insertEvent(
+        type: 'command_execution',
+        text:
+            'Starting local job: codex ${CodexCommandBuilder.shellString(cmd.args)}',
+      );
+
+      await _startLocalLogTailIfNeeded(backfillLines: 0);
+
+      final tmuxName =
+          'cl_${tabId.replaceAll('-', '').substring(0, 8)}_${DateTime.now().millisecondsSinceEpoch}';
+
+      final codexArgsTail = CodexCommandBuilder.shellString(
+        cmd.args.sublist(1),
+      );
+      final baseDevB64 = base64.encode(
+        utf8.encode(CodexCommandBuilder.defaultDeveloperInstructions),
+      );
+
+      final runBody = [
+        'set -e',
+        'PATH="/opt/homebrew/bin:/usr/local/bin:\$HOME/.local/bin:\$PATH"; export PATH',
+        'PROJECT=${_shQuote(projectPath)}',
+        'cd "\$PROJECT" 2>/dev/null || { echo "Failed to cd into \$PROJECT" >&2; exit 2; }',
+        'LOG=${_shQuote(logAbs)}',
+        'ERR=${_shQuote(errAbs)}',
+        'exec >> "\$LOG" 2>> "\$ERR"',
+        'mkdir -p ${_shQuote(_fieldExecDir)} >/dev/null 2>&1 || true',
+        'touch ${_shQuote(_devInstructionsRelPath)} >/dev/null 2>&1 || true',
+        'CODEX_BIN="\$(command -v codex 2>/dev/null || true)"',
+        'if [ -z "\$CODEX_BIN" ]; then echo "codex not found" >&2; exit 127; fi',
+        'JQ_BIN="\$(command -v jq 2>/dev/null || true)"',
+        'PLUTIL_BIN="\$(command -v plutil 2>/dev/null || true)"',
+        'line="\$(tail -n 1 "\$LOG" 2>/dev/null || true)"',
+        'prompt=""',
+        'if [ -n "\$line" ] && [ -n "\$JQ_BIN" ]; then',
+        '  prompt="\$(printf %s\\\\n "\$line" | "\$JQ_BIN" -r \'select(.type=="client.user_message") | (.text // empty)\' 2>/dev/null || true)"',
+        'fi',
+        'if [ -z "\$prompt" ] && [ -n "\$line" ] && [ -n "\$PLUTIL_BIN" ]; then',
+        '  t="\$(printf %s\\\\n "\$line" | "\$PLUTIL_BIN" -extract type raw -o - - 2>/dev/null || true)"',
+        '  if [ "\$t" = "client.user_message" ]; then',
+        '    prompt="\$(printf %s\\\\n "\$line" | "\$PLUTIL_BIN" -extract text raw -o - - 2>/dev/null || true)"',
+        '  fi',
+        'fi',
+        'if [ -z "\$prompt" ]; then',
+        '  echo "Failed to extract prompt from last JSONL log line (install jq or ensure plutil is available)." >&2',
+        '  exit 2',
+        'fi',
+        '',
+        '# Project-scoped developer instructions.',
+        'BASE_DEV_B64=${_shQuote(baseDevB64)}',
+        r'BASE_DEV="$(printf %s "$BASE_DEV_B64" | base64 -D 2>/dev/null || printf %s "$BASE_DEV_B64" | base64 -d 2>/dev/null || true)"',
+        r'USER_DEV="$(cat ".field_exec/developer_instructions.txt" 2>/dev/null || true)"',
+        "APOS=\"'\"",
+        r'DELIM="${APOS}${APOS}${APOS}"',
+        r'REPL="${APOS}${APOS}’"',
+        r'BASE_DEV="$(printf %s "$BASE_DEV" | tr -d "\r" | sed "s/${DELIM}/${REPL}/g")"',
+        r'USER_DEV="$(printf %s "$USER_DEV" | tr -d "\r" | sed "s/${DELIM}/${REPL}/g")"',
+        r'DEV_COMBINED="$(printf "%s\n\n# Project developer instructions (.field_exec/developer_instructions.txt)\n%s\n" "$BASE_DEV" "$USER_DEV")"',
+        r'DEV_TOML="$(printf "%s\n%s\n%s\n" "$DELIM" "$DEV_COMBINED" "$DELIM")"',
+        '',
+        'printf %s\\\\n "\$prompt" | "\$CODEX_BIN" exec -c "developer_instructions=\$DEV_TOML" $codexArgsTail',
+        // If the last JSONL event is missing a trailing newline, tail/line-splitting
+        // can get stuck "waiting" forever. Force a final newline so the client
+        // receives the last line promptly.
+        'printf "\\\\n" >> "\$LOG" 2>/dev/null || true',
+        '',
+        'commit_message=""',
+        'if [ -n "\$JQ_BIN" ]; then',
+        '  commit_message="\$(tail -n 2000 "\$LOG" 2>/dev/null | "\$JQ_BIN" -r \'select(.type=="item.completed" and .item.type=="agent_message") | (.item.text | fromjson | (.commit_message // ""))\' 2>/dev/null | tail -n 1 | tr -d \'\\r\')"',
+        'fi',
+        'if [ -z "\$commit_message" ]; then',
+        '  commit_message="\$(tail -n 2000 "\$LOG" 2>/dev/null | sed -n \'s/.*"commit_message"[[:space:]]*:[[:space:]]*"\\([^"]*\\)".*/\\1/p\' | tail -n 1)"',
+        'fi',
+        'commit_message="\$(printf %s "\$commit_message" | tr \'\\n\\t\' \'  \' | tr -s \' \' | sed \'s/^ //; s/ \$//\')"',
+        'if [ -z "\$commit_message" ]; then',
+        '  printf %s\\\\n \'{"type":"$_serverGitCommitType","status":"skipped","reason":"empty_commit_message"}\'',
+        '  exit 0',
+        'fi',
+        'commit_message_b64="\$(printf %s "\$commit_message" | base64 | tr -d \'\\n\')"',
+        'printf %s\\\\n \'{"type":"$_serverGitCommitType","status":"started","commit_message_b64":"\'"\$commit_message_b64"\'"}\'',
+        'if ! command -v git >/dev/null 2>&1; then',
+        '  printf %s\\\\n \'{"type":"$_serverGitCommitType","status":"failed","reason":"git_not_found","commit_message_b64":"\'"\$commit_message_b64"\'"}\'',
+        '  exit 0',
+        'fi',
+        'if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then',
+        '  printf %s\\\\n \'{"type":"$_serverGitCommitType","status":"failed","reason":"not_a_git_repo","commit_message_b64":"\'"\$commit_message_b64"\'"}\'',
+        '  exit 0',
+        'fi',
+        'git add -A >/dev/null 2>&1 || true',
+        'if [ -z "\$(git status --porcelain 2>/dev/null || true)" ]; then',
+        '  printf %s\\\\n \'{"type":"$_serverGitCommitType","status":"skipped","reason":"no_changes","commit_message_b64":"\'"\$commit_message_b64"\'"}\'',
+        '  exit 0',
+        'fi',
+        'if git commit -m "\$commit_message" >/dev/null 2>&1; then',
+        '  printf %s\\\\n \'{"type":"$_serverGitCommitType","status":"completed","commit_message_b64":"\'"\$commit_message_b64"\'"}\'',
+        'else',
+        '  printf %s\\\\n \'{"type":"$_serverGitCommitType","status":"failed","reason":"git_commit_failed","commit_message_b64":"\'"\$commit_message_b64"\'"}\'',
+        'fi',
+      ].join('\n');
+
+      final startBody = [
+        'PATH="/opt/homebrew/bin:/usr/local/bin:\$HOME/.local/bin:\$PATH"; export PATH',
+        'set -e',
+        'TMUX_BIN="\$(command -v tmux 2>/dev/null || true)"',
+        'rm -f ${_shQuote(jobAbs)} >/dev/null 2>&1 || true',
+        'if [ -n "\$TMUX_BIN" ]; then',
+        '  "\$TMUX_BIN" new-session -d -s ${_shQuote(tmuxName)} sh -c ${_shQuote(runBody)}',
+        '  echo "tmux:$tmuxName" > ${_shQuote(jobAbs)}',
+        '  printf %s\\\\n "FIELD_EXEC_JOB=tmux:$tmuxName"',
+        'else',
+        '  nohup sh -c ${_shQuote(runBody)} >/dev/null 2>&1 &',
+        '  pid=\$!',
+        '  echo "\$pid" > ${_shQuote(pidAbs)}',
+        '  echo "pid:\$pid" > ${_shQuote(jobAbs)}',
+        '  printf %s\\\\n "FIELD_EXEC_JOB=pid:\$pid"',
+        'fi',
+      ].join('\n');
+
+      final launchProc = _localShell.startCommand(
+        executable: '/bin/sh',
+        arguments: ['-c', startBody],
+        workingDirectory: projectPath,
+      );
+
+      final stdout = <String>[];
+      final stderr = <String>[];
+      final stdoutSub = launchProc.stdoutLines.listen(stdout.add);
+      final stderrSub = launchProc.stderrLines.listen(stderr.add);
+
+      int? exit;
+      Object? exitError;
+      try {
+        exit = await launchProc.exitCode.timeout(const Duration(seconds: 10));
+      } on TimeoutException catch (e) {
+        exitError = e;
+      } finally {
+        await stdoutSub.cancel();
+        await stderrSub.cancel();
+      }
+
+      String? jobLine;
+      for (final line in [...stdout, ...stderr].reversed) {
+        if (line.startsWith('FIELD_EXEC_JOB=')) {
+          jobLine = line;
+          break;
+        }
+      }
+      var jobId = jobLine?.substring('FIELD_EXEC_JOB='.length).trim();
+      if (jobId == null || jobId.isEmpty) {
+        try {
+          jobId = (await File(jobAbs).readAsString()).trim();
+        } catch (_) {}
+      }
+
+      if (jobId == null || jobId.isEmpty) {
+        if ((exit ?? 1) != 0) {
+          throw StateError(
+            'Local launch failed (exit=$exit): ${(stderr.join('\n')).trim().isEmpty ? (stdout.join('\n')).trim() : (stderr.join('\n')).trim()}',
+          );
+        }
+        if (exitError != null) {
+          throw StateError(
+            'Local launch failed (timeout): ${(stderr.join('\n')).trim().isEmpty ? (stdout.join('\n')).trim() : (stderr.join('\n')).trim()}',
+          );
+        }
+        throw StateError('Local launch did not return a job id.');
+      }
+
+      _remoteJobId = jobId;
+      remoteJobId.value = jobId;
+      await _sessionStore.saveRemoteJobId(
+        targetKey: target.targetKey,
+        projectPath: projectPath,
+        tabId: tabId,
+        remoteJobId: jobId,
+      );
+    } catch (e) {
+      await _insertEvent(type: 'error', text: 'Local start failed: $e');
+      _cancelCurrent = null;
+      isRunning.value = false;
+      thinkingPreview.value = null;
+      _remoteJobId = null;
+      remoteJobId.value = null;
+      try {
+        await _sessionStore.clearRemoteJobId(
+          targetKey: target.targetKey,
+          projectPath: projectPath,
+          tabId: tabId,
+        );
+      } catch (_) {}
+    }
   }
 
   Future<void> _runRemoteViaTmux({
@@ -1799,8 +1979,9 @@ class SessionController extends SessionControllerBase {
     final profile = target.profile!;
 
     final pem =
-        (await _storage.read(key: SecureStorageService.sshPrivateKeyPemKey))
-            ?.trim() ??
+        (await _storage.read(
+          key: SecureStorageService.sshPrivateKeyPemKey,
+        ))?.trim() ??
         '';
     if (pem.isEmpty) {
       await _insertEvent(
@@ -2167,15 +2348,6 @@ class SessionController extends SessionControllerBase {
         'if [ -f ${_shQuote(absPath)} ]; then wc -l ${_shQuote(absPath)} 2>/dev/null | sed \'s/^[[:space:]]*\\\\([0-9][0-9]*\\\\).*/\\\\1/\'; else echo 0; fi';
     final res = await run(_wrapWithShell(profile, script));
     return _parseWcLineCount(res.stdout);
-  }
-
-  Future<int> _localLineCount({required String path}) async {
-    try {
-      final res = await Process.run('/usr/bin/wc', ['-l', path]);
-      return _parseWcLineCount((res.stdout as Object?)?.toString() ?? '');
-    } catch (_) {
-      return 0;
-    }
   }
 
   Future<void> _startRemoteLogTailIfNeeded({
@@ -2956,6 +3128,10 @@ class SessionController extends SessionControllerBase {
     if (isRunning.value) return;
     if (_autoCommitCatchUpInProgress) return;
     if (!target.local) return;
+    // Local turns now auto-commit inside the detached job (mirrors remote).
+    // If we already have server-side commit markers, do not attempt a client
+    // catch-up commit (avoids double-commit noise).
+    if (lines.any((l) => l.contains('"type":"$_serverGitCommitType"'))) return;
 
     String? lastCommitMessage;
     String? lastSourceItemId;
@@ -3031,26 +3207,6 @@ class SessionController extends SessionControllerBase {
       await _maybeAutoCommit(commitMessage, sourceItemId: sourceItemId);
     } finally {
       _autoCommitCatchUpInProgress = false;
-    }
-  }
-
-  Future<void> _consumeCodexStreams({
-    required Stream<Map<String, Object?>> stdoutJsonl,
-    required Stream<String> stderrLines,
-    required Future<void> onExit,
-  }) async {
-    final stderrSub = stderrLines.listen((line) {
-      if (line.trim().isEmpty) return;
-      _insertEvent(type: 'stderr', text: line);
-    });
-
-    try {
-      await for (final event in stdoutJsonl) {
-        await _handleCodexJsonEvent(event);
-      }
-      await onExit;
-    } finally {
-      await stderrSub.cancel();
     }
   }
 
@@ -3157,6 +3313,7 @@ class SessionController extends SessionControllerBase {
         ? false
         : (tailStartLine + start) > 1;
     _pendingActionsMessage = null;
+    _seenAgentMessageItemIds.clear();
     final backfill = <Message>[
       _eventMessage(
         type: 'replay',
@@ -3237,6 +3394,7 @@ class SessionController extends SessionControllerBase {
         : (tailStartIndex + start) > 0;
     final wasEmpty = chatController.messages.isEmpty;
     _pendingActionsMessage = null;
+    _seenAgentMessageItemIds.clear();
     final backfill = <Message>[
       _eventMessage(
         type: 'replay',
@@ -3514,20 +3672,30 @@ class SessionController extends SessionControllerBase {
         } catch (_) {}
       }
 
-      if (!target.local &&
-          (type == 'turn.completed' || type == 'turn.failed')) {
+      if (type == 'turn.completed' || type == 'turn.failed') {
         await _sessionStore.clearRemoteJobId(
           targetKey: target.targetKey,
           projectPath: projectPath,
           tabId: tabId,
         );
-        try {
-          await _remoteJobs.remove(
-            targetKey: target.targetKey,
-            projectPath: projectPath,
-            tabId: tabId,
-          );
-        } catch (_) {}
+        if (!target.local) {
+          try {
+            await _remoteJobs.remove(
+              targetKey: target.targetKey,
+              projectPath: projectPath,
+              tabId: tabId,
+            );
+          } catch (_) {}
+        } else {
+          try {
+            final job = File(_joinPosix(projectPath, _jobRelPath));
+            if (await job.exists()) await job.writeAsString('', flush: true);
+          } catch (_) {}
+          try {
+            final pid = File(_joinPosix(projectPath, _pidRelPath));
+            if (await pid.exists()) await pid.writeAsString('', flush: true);
+          } catch (_) {}
+        }
         _remoteJobId = null;
         remoteJobId.value = null;
         _cancelCurrent = null;
@@ -3558,6 +3726,10 @@ class SessionController extends SessionControllerBase {
         if (itemType == 'agent_message') {
           final text = item['text'] as String? ?? '';
           final itemId = item['id']?.toString();
+          if (itemId != null && itemId.isNotEmpty) {
+            if (_seenAgentMessageItemIds.contains(itemId)) return;
+            _seenAgentMessageItemIds.add(itemId);
+          }
           final messages = await _materializeAgentMessage(
             text,
             replay: false,
@@ -3643,10 +3815,6 @@ class SessionController extends SessionControllerBase {
                 : commitMessage,
           ),
         );
-
-        if (!replay && commitMessage.isNotEmpty && target.local) {
-          await _maybeAutoCommit(commitMessage, sourceItemId: sourceItemId);
-        }
 
         if (resp.actions.isNotEmpty) {
           final actionsMessage =
@@ -3821,6 +3989,10 @@ class SessionController extends SessionControllerBase {
         if (itemType == 'agent_message') {
           final text = item['text'] as String? ?? '';
           final itemId = item['id']?.toString();
+          if (itemId != null && itemId.isNotEmpty) {
+            if (_seenAgentMessageItemIds.contains(itemId)) return const [];
+            _seenAgentMessageItemIds.add(itemId);
+          }
           return _materializeAgentMessage(
             text,
             replay: replay,
@@ -3961,10 +4133,12 @@ class SessionController extends SessionControllerBase {
 
     final out = (commit.stdout as Object?).toString().trim();
     final err = (commit.stderr as Object?).toString().trim();
-    if (out.isNotEmpty)
+    if (out.isNotEmpty) {
       await _insertEvent(type: 'git_commit_stdout', text: out);
-    if (err.isNotEmpty)
+    }
+    if (err.isNotEmpty) {
       await _insertEvent(type: 'git_commit_stderr', text: err);
+    }
 
     await _appendClientJsonlToLog(
       jsonlLine: _clientGitCommitJsonlLine(

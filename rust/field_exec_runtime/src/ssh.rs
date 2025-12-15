@@ -1,26 +1,249 @@
 use std::collections::HashMap;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use std::time::Duration;
 
 use async_ssh2_tokio::Error as SshError;
-use field_exec_adapters::ssh::{run_command, SshAuth, SshTimeouts};
 use field_exec_api::signals::{
     AuthProvide, AuthRequired, SshAuthorizedKeyRequest, SshAuthorizedKeyResponse, SshCancelStream,
     SshExecRequest, SshExecResponse, SshGenerateKeyRequest, SshGenerateKeyResponse,
     SshInstallPublicKeyRequest, SshInstallPublicKeyResponse, SshStartCommandRequest,
-    SshStartCommandResponse, SshStreamExit, SshStreamLine, SshWriteFileRequest, SshWriteFileResponse,
+    SshStartCommandResponse, SshStreamExit, SshStreamLine, SshWriteFileRequest,
+    SshWriteFileResponse,
 };
 use field_exec_rinf::storage::StorageClient;
-use rinf::{DartSignal, RustSignal};
 use rand_core::OsRng;
+use rinf::{DartSignal, RustSignal};
 use ssh_key::{Algorithm, LineEnding, PrivateKey};
 use tokio::spawn;
-use tokio::sync::{mpsc, Mutex, oneshot};
+use tokio::sync::{Mutex, mpsc, oneshot};
 use tokio::time::timeout;
 
 const AUTH_KIND_SSH_PASSWORD: i32 = 0;
 
 const KEYCHAIN_KEY_SSH_PRIVATE_KEY_PEM: &str = "ssh_private_key_pem";
+
+#[derive(Clone, Copy, Debug, Hash, Eq, PartialEq)]
+enum PoolAuthKind {
+    Key,
+    Password,
+}
+
+#[derive(Clone, Debug, Hash, Eq, PartialEq)]
+struct PoolKey {
+    host: String,
+    port: u16,
+    username: String,
+    auth_kind: PoolAuthKind,
+    key_hash: u64,
+}
+
+#[derive(Clone)]
+struct SshConnectionPool {
+    clients: Arc<Mutex<HashMap<PoolKey, async_ssh2_tokio::Client>>>,
+}
+
+impl SshConnectionPool {
+    fn new() -> Self {
+        Self {
+            clients: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    fn key_hash(private_key_pem: &str) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        private_key_pem.trim().hash(&mut hasher);
+        hasher.finish()
+    }
+
+    fn should_reconnect(err: &SshError) -> bool {
+        match err {
+            SshError::SshError(_) | SshError::SendError(_) | SshError::ChannelSendError(_) => true,
+            SshError::IoError(e) => matches!(
+                e.kind(),
+                std::io::ErrorKind::BrokenPipe
+                    | std::io::ErrorKind::ConnectionReset
+                    | std::io::ErrorKind::ConnectionAborted
+                    | std::io::ErrorKind::NotConnected
+                    | std::io::ErrorKind::UnexpectedEof
+            ),
+            _ => false,
+        }
+    }
+
+    async fn get(&self, key: &PoolKey) -> Option<async_ssh2_tokio::Client> {
+        self.clients.lock().await.get(key).cloned()
+    }
+
+    async fn insert(&self, key: PoolKey, client: async_ssh2_tokio::Client) {
+        self.clients.lock().await.insert(key, client);
+    }
+
+    async fn remove(&self, key: &PoolKey) {
+        self.clients.lock().await.remove(key);
+    }
+
+    async fn connect_key(
+        &self,
+        host: &str,
+        port: u16,
+        username: &str,
+        private_key_pem: &str,
+        passphrase: Option<&str>,
+        connect_timeout: Duration,
+    ) -> Result<async_ssh2_tokio::Client, SshError> {
+        let auth_method = async_ssh2_tokio::AuthMethod::with_key(private_key_pem, passphrase);
+        timeout(
+            connect_timeout,
+            async_ssh2_tokio::Client::connect(
+                (host, port),
+                username,
+                auth_method,
+                async_ssh2_tokio::ServerCheckMethod::NoCheck,
+            ),
+        )
+        .await
+        .map_err(|_| {
+            SshError::IoError(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "SSH connect timeout",
+            ))
+        })?
+    }
+
+    async fn connect_password(
+        &self,
+        host: &str,
+        port: u16,
+        username: &str,
+        password: &str,
+        connect_timeout: Duration,
+    ) -> Result<async_ssh2_tokio::Client, SshError> {
+        let auth_method = async_ssh2_tokio::AuthMethod::with_password(password);
+        timeout(
+            connect_timeout,
+            async_ssh2_tokio::Client::connect(
+                (host, port),
+                username,
+                auth_method,
+                async_ssh2_tokio::ServerCheckMethod::NoCheck,
+            ),
+        )
+        .await
+        .map_err(|_| {
+            SshError::IoError(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "SSH connect timeout",
+            ))
+        })?
+    }
+
+    async fn get_or_connect_key(
+        &self,
+        host: &str,
+        port: u16,
+        username: &str,
+        private_key_pem: &str,
+        passphrase: Option<&str>,
+        connect_timeout: Duration,
+    ) -> Result<async_ssh2_tokio::Client, SshError> {
+        let key = PoolKey {
+            host: host.to_owned(),
+            port,
+            username: username.to_owned(),
+            auth_kind: PoolAuthKind::Key,
+            key_hash: Self::key_hash(private_key_pem),
+        };
+        if let Some(existing) = self.get(&key).await {
+            return Ok(existing);
+        }
+        let client = self
+            .connect_key(
+                host,
+                port,
+                username,
+                private_key_pem,
+                passphrase,
+                connect_timeout,
+            )
+            .await?;
+        self.insert(key, client.clone()).await;
+        Ok(client)
+    }
+
+    async fn get_or_connect_password(
+        &self,
+        host: &str,
+        port: u16,
+        username: &str,
+        password: &str,
+        connect_timeout: Duration,
+    ) -> Result<async_ssh2_tokio::Client, SshError> {
+        let key = PoolKey {
+            host: host.to_owned(),
+            port,
+            username: username.to_owned(),
+            auth_kind: PoolAuthKind::Password,
+            key_hash: 0,
+        };
+        if let Some(existing) = self.get(&key).await {
+            return Ok(existing);
+        }
+        let client = self
+            .connect_password(host, port, username, password, connect_timeout)
+            .await?;
+        self.insert(key, client.clone()).await;
+        Ok(client)
+    }
+
+    async fn exec_with_reconnect<F, Fut>(
+        &self,
+        key: PoolKey,
+        connect: F,
+        command_timeout: Duration,
+        command: &str,
+    ) -> Result<async_ssh2_tokio::client::CommandExecutedResult, SshError>
+    where
+        F: Fn() -> Fut,
+        Fut: std::future::Future<Output = Result<async_ssh2_tokio::Client, SshError>>,
+    {
+        let mut client = if let Some(existing) = self.get(&key).await {
+            existing
+        } else {
+            let c = connect().await?;
+            self.insert(key.clone(), c.clone()).await;
+            c
+        };
+
+        let first = timeout(command_timeout, client.execute(command))
+            .await
+            .map_err(|_| {
+                SshError::IoError(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "SSH command timeout",
+                ))
+            })?;
+        match first {
+            Ok(r) => return Ok(r),
+            Err(e) if Self::should_reconnect(&e) => {
+                self.remove(&key).await;
+            }
+            Err(e) => return Err(e),
+        }
+
+        client = connect().await?;
+        self.insert(key, client.clone()).await;
+        timeout(command_timeout, client.execute(command))
+            .await
+            .map_err(|_| {
+                SshError::IoError(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "SSH command timeout",
+                ))
+            })?
+    }
+}
 
 #[derive(Clone)]
 struct AuthBroker {
@@ -73,6 +296,7 @@ impl AuthBroker {
 pub async fn run() {
     let storage = StorageClient::new();
     let auth = AuthBroker::new();
+    let pool = SshConnectionPool::new();
 
     let exec_rx = SshExecRequest::get_dart_signal_receiver();
     let start_rx = SshStartCommandRequest::get_dart_signal_receiver();
@@ -89,8 +313,9 @@ pub async fn run() {
                 let req = pack.message;
                 let storage = storage.clone();
                 let auth = auth.clone();
+                let pool = pool.clone();
                 spawn(async move {
-                    let response = handle_exec(storage, auth, req).await;
+                    let response = handle_exec(storage, auth, pool, req).await;
                     response.send_signal_to_dart();
                 });
             }
@@ -99,8 +324,9 @@ pub async fn run() {
                 let storage = storage.clone();
                 let auth = auth.clone();
                 let streams = streams.clone();
+                let pool = pool.clone();
                 spawn(async move {
-                    let response = streams.start(storage, auth, req).await;
+                    let response = streams.start(storage, auth, pool, req).await;
                     response.send_signal_to_dart();
                 });
             }
@@ -108,8 +334,9 @@ pub async fn run() {
                 let req = pack.message;
                 let storage = storage.clone();
                 let auth = auth.clone();
+                let pool = pool.clone();
                 spawn(async move {
-                    let response = handle_write_file(storage, auth, req).await;
+                    let response = handle_write_file(storage, auth, pool, req).await;
                     response.send_signal_to_dart();
                 });
             }
@@ -142,6 +369,7 @@ pub async fn run() {
 async fn handle_exec(
     storage: StorageClient,
     auth: AuthBroker,
+    pool: SshConnectionPool,
     req: SshExecRequest,
 ) -> SshExecResponse {
     let request_id = req.request_id;
@@ -160,10 +388,8 @@ async fn handle_exec(
         }
     };
 
-    let timeouts = SshTimeouts {
-        connect: Duration::from_millis(req.connect_timeout_ms.max(1) as u64),
-        command: Duration::from_millis(req.command_timeout_ms.max(1) as u64),
-    };
+    let connect_timeout = Duration::from_millis(req.connect_timeout_ms.max(1) as u64);
+    let command_timeout = Duration::from_millis(req.command_timeout_ms.max(1) as u64);
 
     let private_key_pem = req
         .private_key_pem
@@ -183,18 +409,28 @@ async fn handle_exec(
     };
 
     let last_err = if !private_key_pem.trim().is_empty() {
-        match run_command(
-            &req.host,
+        let key = PoolKey {
+            host: req.host.clone(),
             port,
-            &req.username,
-            SshAuth::Key {
-                private_key_pem: &private_key_pem,
-                passphrase: req.private_key_passphrase.as_deref(),
-            },
-            &req.command,
-            timeouts,
-        )
-        .await
+            username: req.username.clone(),
+            auth_kind: PoolAuthKind::Key,
+            key_hash: SshConnectionPool::key_hash(&private_key_pem),
+        };
+        let passphrase = req.private_key_passphrase.as_deref();
+        let connect = || {
+            pool.connect_key(
+                &req.host,
+                port,
+                &req.username,
+                &private_key_pem,
+                passphrase,
+                connect_timeout,
+            )
+        };
+
+        match pool
+            .exec_with_reconnect(key, connect, command_timeout, &req.command)
+            .await
         {
             Ok(r) => {
                 return SshExecResponse {
@@ -202,7 +438,7 @@ async fn handle_exec(
                     ok: true,
                     stdout: r.stdout,
                     stderr: r.stderr,
-                    exit_status: r.exit_status,
+                    exit_status: i32::try_from(r.exit_status).unwrap_or(-1),
                     error: None,
                 };
             }
@@ -252,22 +488,25 @@ async fn handle_exec(
         }
     };
 
-    match run_command(
-        &req.host,
+    let key = PoolKey {
+        host: req.host.clone(),
         port,
-        &req.username,
-        SshAuth::Password(&password),
-        &req.command,
-        timeouts,
-    )
-    .await
+        username: req.username.clone(),
+        auth_kind: PoolAuthKind::Password,
+        key_hash: 0,
+    };
+    let connect =
+        || pool.connect_password(&req.host, port, &req.username, &password, connect_timeout);
+    match pool
+        .exec_with_reconnect(key, connect, command_timeout, &req.command)
+        .await
     {
         Ok(r) => SshExecResponse {
             request_id,
             ok: true,
             stdout: r.stdout,
             stderr: r.stderr,
-            exit_status: r.exit_status,
+            exit_status: i32::try_from(r.exit_status).unwrap_or(-1),
             error: None,
         },
         Err(e) => SshExecResponse {
@@ -319,6 +558,7 @@ impl StreamRegistry {
         &self,
         storage: StorageClient,
         auth: AuthBroker,
+        pool: SshConnectionPool,
         req: SshStartCommandRequest,
     ) -> SshStartCommandResponse {
         let request_id = req.request_id;
@@ -361,6 +601,7 @@ impl StreamRegistry {
             private_key_pem,
             passphrase,
             connect_timeout,
+            &pool,
         )
         .await;
 
@@ -381,7 +622,8 @@ impl StreamRegistry {
             let (stdout_tx, mut stdout_rx) = mpsc::channel::<Vec<u8>>(16);
             let (stderr_tx, mut stderr_rx) = mpsc::channel::<Vec<u8>>(16);
 
-            let exec_future = client.execute_io(&command, stdout_tx, Some(stderr_tx), None, false, None);
+            let exec_future =
+                client.execute_io(&command, stdout_tx, Some(stderr_tx), None, false, None);
 
             let mut out_pending = String::new();
             let mut err_pending = String::new();
@@ -470,7 +712,11 @@ fn flush_pending(stream_id: u64, is_stderr: bool, pending: &mut String) {
     .send_signal_to_dart();
 }
 
-async fn resolve_key_pem(storage: &StorageClient, override_pem: Option<String>, keychain_key: &str) -> String {
+async fn resolve_key_pem(
+    storage: &StorageClient,
+    override_pem: Option<String>,
+    keychain_key: &str,
+) -> String {
     if let Some(s) = override_pem.filter(|s| !s.trim().is_empty()) {
         return s;
     }
@@ -491,30 +737,26 @@ async fn connect_with_optional_password(
     private_key_pem: String,
     private_key_passphrase: Option<String>,
     connect_timeout: Duration,
+    pool: &SshConnectionPool,
 ) -> Result<(async_ssh2_tokio::Client, bool), String> {
     if !private_key_pem.trim().is_empty() {
-        let auth_method = async_ssh2_tokio::AuthMethod::with_key(
-            &private_key_pem,
-            private_key_passphrase.as_deref(),
-        );
-        match timeout(
-            connect_timeout,
-            async_ssh2_tokio::Client::connect(
-                (host, port),
+        match pool
+            .get_or_connect_key(
+                host,
+                port,
                 username,
-                auth_method,
-                async_ssh2_tokio::ServerCheckMethod::NoCheck,
-            ),
-        )
-        .await
+                &private_key_pem,
+                private_key_passphrase.as_deref(),
+                connect_timeout,
+            )
+            .await
         {
-            Ok(Ok(client)) => return Ok((client, false)),
-            Ok(Err(SshError::KeyAuthFailed)) => {}
-            Ok(Err(SshError::KeyInvalid(_))) => {
+            Ok(client) => return Ok((client, false)),
+            Err(SshError::KeyAuthFailed) => {}
+            Err(SshError::KeyInvalid(_)) => {
                 return Err("SSH private key is invalid or passphrase is wrong".to_owned());
             }
-            Ok(Err(e)) => return Err(e.to_string()),
-            Err(_) => return Err("SSH connect timeout".to_owned()),
+            Err(e) => return Err(e.to_string()),
         }
     }
 
@@ -525,25 +767,16 @@ async fn connect_with_optional_password(
         )
         .await?;
 
-    let auth_method = async_ssh2_tokio::AuthMethod::with_password(&password);
-    timeout(
-        connect_timeout,
-        async_ssh2_tokio::Client::connect(
-            (host, port),
-            username,
-            auth_method,
-            async_ssh2_tokio::ServerCheckMethod::NoCheck,
-        ),
-    )
-    .await
-    .map_err(|_| "SSH connect timeout".to_owned())?
-    .map(|c| (c, true))
-    .map_err(|e| e.to_string())
+    pool.get_or_connect_password(host, port, username, &password, connect_timeout)
+        .await
+        .map(|c| (c, true))
+        .map_err(|e| e.to_string())
 }
 
 async fn handle_write_file(
     storage: StorageClient,
     auth: AuthBroker,
+    pool: SshConnectionPool,
     req: SshWriteFileRequest,
 ) -> SshWriteFileResponse {
     let request_id = req.request_id;
@@ -558,8 +791,12 @@ async fn handle_write_file(
         }
     };
 
-    let private_key_pem =
-        resolve_key_pem(&storage, req.private_key_pem.clone(), KEYCHAIN_KEY_SSH_PRIVATE_KEY_PEM).await;
+    let private_key_pem = resolve_key_pem(
+        &storage,
+        req.private_key_pem.clone(),
+        KEYCHAIN_KEY_SSH_PRIVATE_KEY_PEM,
+    )
+    .await;
 
     let connect_timeout = Duration::from_millis(req.connect_timeout_ms.max(1) as u64);
     let command_timeout = Duration::from_millis(req.command_timeout_ms.max(1) as u64);
@@ -573,6 +810,7 @@ async fn handle_write_file(
         private_key_pem,
         req.private_key_passphrase.clone(),
         connect_timeout,
+        &pool,
     )
     .await
     {
@@ -600,7 +838,14 @@ async fn handle_write_file(
     let (stderr_tx, mut stderr_rx) = mpsc::channel::<Vec<u8>>(8);
     let (stdin_tx, stdin_rx) = mpsc::channel::<Vec<u8>>(2);
 
-    let exec_future = client.execute_io(&cmd, stdout_tx, Some(stderr_tx), Some(stdin_rx), false, None);
+    let exec_future = client.execute_io(
+        &cmd,
+        stdout_tx,
+        Some(stderr_tx),
+        Some(stdin_rx),
+        false,
+        None,
+    );
     tokio::pin!(exec_future);
 
     let send_stdin = async move {
@@ -709,8 +954,9 @@ fn handle_generate_key(req: SshGenerateKeyRequest) -> SshGenerateKeyResponse {
 
 fn handle_authorized_key(req: SshAuthorizedKeyRequest) -> SshAuthorizedKeyResponse {
     let request_id = req.request_id;
-    let parsed = russh::keys::decode_secret_key(&req.private_key_pem, req.private_key_passphrase.as_deref())
-        .map_err(|e| e.to_string());
+    let parsed =
+        russh::keys::decode_secret_key(&req.private_key_pem, req.private_key_passphrase.as_deref())
+            .map_err(|e| e.to_string());
     let mut key = match parsed {
         Ok(k) => k,
         Err(e) => {
@@ -764,7 +1010,8 @@ async fn handle_install_public_key(req: SshInstallPublicKeyRequest) -> SshInstal
         }
     };
 
-    let parsed = russh::keys::decode_secret_key(&req.private_key_pem, req.private_key_passphrase.as_deref());
+    let parsed =
+        russh::keys::decode_secret_key(&req.private_key_pem, req.private_key_passphrase.as_deref());
     let mut key = match parsed {
         Ok(k) => k,
         Err(e) => {
