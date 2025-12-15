@@ -1,6 +1,7 @@
-import 'dart:typed_data';
+import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_chat_core/flutter_chat_core.dart';
 import 'package:flutter_chat_ui/flutter_chat_ui.dart';
 import 'package:get/get.dart';
@@ -22,6 +23,103 @@ class _CodexChatViewState extends State<CodexChatView> {
   bool _scrollToBottomScheduled = false;
 
   SessionControllerBase get controller => widget.controller;
+
+  String _copyTextFromCustomMetadata(Map<String, dynamic>? metadata) {
+    final meta = metadata ?? const <String, dynamic>{};
+    final kind = meta['kind']?.toString();
+
+    if (kind == 'codex_image') {
+      final path = meta['path']?.toString() ?? '';
+      final caption = meta['caption']?.toString() ?? '';
+      return [caption, path].where((s) => s.trim().isNotEmpty).join('\n');
+    }
+
+    if (kind == 'codex_actions') {
+      final actions = (meta['actions'] as List?) ?? const [];
+      return actions.whereType<Map>().map((a) {
+        final label = a['label']?.toString() ?? '';
+        final value = a['value']?.toString() ?? '';
+        if (label.trim().isEmpty) return value;
+        if (value.trim().isEmpty) return label;
+        return '$label: $value';
+      }).where((s) => s.trim().isNotEmpty).join('\n');
+    }
+
+    if (kind == 'codex_event') {
+      final eventType = meta['eventType']?.toString() ?? '';
+      final text = meta['text']?.toString() ?? '';
+      return [eventType, text].where((s) => s.trim().isNotEmpty).join('\n');
+    }
+
+    if (kind == 'codex_item') {
+      final itemType = meta['itemType']?.toString() ?? '';
+      final text = meta['text']?.toString() ?? '';
+      return [itemType, text].where((s) => s.trim().isNotEmpty).join('\n');
+    }
+
+    final text = meta['text']?.toString();
+    if (text != null && text.trim().isNotEmpty) return text;
+
+    return '';
+  }
+
+  String _copyTextForMessage(Message message) {
+    return message.map(
+      text: (m) => m.text,
+      textStream: (_) => '',
+      image: (m) => (m.text ?? '').trim().isNotEmpty ? (m.text ?? '') : m.source,
+      file: (m) => m.name.trim().isNotEmpty ? m.name : m.source,
+      video: (m) {
+        final t = (m.text ?? '').trim();
+        if (t.isNotEmpty) return t;
+        final n = (m.name ?? '').trim();
+        if (n.isNotEmpty) return n;
+        return m.source;
+      },
+      audio: (m) => (m.text ?? '').trim().isNotEmpty ? (m.text ?? '') : m.source,
+      system: (m) => m.text,
+      custom: (m) => _copyTextFromCustomMetadata(m.metadata),
+      unsupported: (_) => '',
+    );
+  }
+
+  Future<void> _copyMessage(BuildContext context, Message message) async {
+    final text = _copyTextForMessage(message);
+    if (text.trim().isEmpty) return;
+    await Clipboard.setData(ClipboardData(text: text));
+
+    if (!context.mounted) return;
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    messenger?.clearSnackBars();
+    messenger?.showSnackBar(
+      const SnackBar(content: Text('Copied to clipboard')),
+    );
+  }
+
+  Future<void> _showCopyMenu(
+    BuildContext context,
+    Message message,
+    Offset globalPosition,
+  ) async {
+    final overlay = Overlay.of(context).context.findRenderObject();
+    if (overlay is! RenderBox) return;
+
+    final selected = await showMenu<String>(
+      context: context,
+      position: RelativeRect.fromRect(
+        Rect.fromLTWH(globalPosition.dx, globalPosition.dy, 0, 0),
+        Offset.zero & overlay.size,
+      ),
+      items: const [
+        PopupMenuItem<String>(value: 'copy', child: Text('Copy')),
+      ],
+    );
+
+    if (!context.mounted) return;
+    if (selected == 'copy') {
+      await _copyMessage(context, message);
+    }
+  }
 
   @override
   void dispose() {
@@ -79,6 +177,18 @@ class _CodexChatViewState extends State<CodexChatView> {
         currentUserId: 'user',
         resolveUser: controller.resolveUser,
         onMessageSend: controller.sendText,
+        onMessageLongPress: (context, message, {required index, required details}) {
+          unawaited(_copyMessage(context, message));
+        },
+        onMessageSecondaryTap: (context, message, {required index, details}) {
+          final pos =
+              details?.globalPosition ??
+              Offset(
+                MediaQuery.sizeOf(context).width / 2,
+                MediaQuery.sizeOf(context).height / 2,
+              );
+          unawaited(_showCopyMenu(context, message, pos));
+        },
         theme: theme,
         backgroundColor: theme.colors.surface,
         builders: Builders(

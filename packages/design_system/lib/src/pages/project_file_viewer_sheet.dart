@@ -190,7 +190,12 @@ class _ProjectFileViewerSheetState extends State<ProjectFileViewerSheet> {
                       )
                     : LayoutBuilder(
                         builder: (context, constraints) {
-                          final minWidth = constraints.maxWidth;
+                          final mediaWidth = MediaQuery.sizeOf(context).width;
+                          final minWidth =
+                              constraints.hasBoundedWidth &&
+                                      constraints.maxWidth.isFinite
+                                  ? constraints.maxWidth
+                                  : mediaWidth;
                           return SingleChildScrollView(
                             child: SingleChildScrollView(
                               scrollDirection: Axis.horizontal,
@@ -206,7 +211,7 @@ class _ProjectFileViewerSheetState extends State<ProjectFileViewerSheet> {
                                     ),
                                     child: Column(
                                       crossAxisAlignment:
-                                          CrossAxisAlignment.stretch,
+                                          CrossAxisAlignment.start,
                                       children: [
                                         for (
                                           var index = 0;
