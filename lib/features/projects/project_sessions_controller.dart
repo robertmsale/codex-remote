@@ -16,6 +16,7 @@ import '../../services/project_store.dart';
 import '../../services/project_tabs_store.dart';
 import '../../services/secure_storage_service.dart';
 import '../../services/ssh_service.dart';
+import '../../services/shared_projects_service.dart';
 import '../../rinf/rust_ssh_service.dart';
 import '../session/session_controller.dart';
 
@@ -57,6 +58,7 @@ class ProjectSessionsController extends ProjectSessionsControllerBase {
   ConversationStore get _conversations => Get.find<ConversationStore>();
   ActiveSessionService get _active => Get.find<ActiveSessionService>();
   ProjectStore get _projects => Get.find<ProjectStore>();
+  SharedProjectsService get _sharedProjects => Get.find<SharedProjectsService>();
   AppLifecycleService get _lifecycle => Get.find<AppLifecycleService>();
   SshService get _ssh => Get.find<SshService>();
 
@@ -721,13 +723,13 @@ class ProjectSessionsController extends ProjectSessionsControllerBase {
     final nextName = title.trim();
     if (nextName.isEmpty) return;
 
-    final list = await _projects.loadProjects(targetKey: args.target.targetKey);
+    final list = await _sharedProjects.loadProjects(target: args.target);
     final idx = list.indexWhere((p) => p.id == args.project.id);
     if (idx == -1) return;
     final next = list.toList(growable: true);
     next[idx] = next[idx].copyWith(name: nextName);
-    await _projects.saveProjects(
-      targetKey: args.target.targetKey,
+    await _sharedProjects.saveProjects(
+      target: args.target,
       projects: next.toList(growable: false),
     );
     projectName.value = nextName;
@@ -1079,7 +1081,7 @@ done
     final group = args.project.group?.trim() ?? '';
     if (group.isEmpty) return const [];
 
-    final all = await _projects.loadProjects(targetKey: args.target.targetKey);
+    final all = await _sharedProjects.loadProjects(target: args.target);
     final out = all
         .where((p) => p.id != args.project.id)
         .where((p) => (p.group?.trim() ?? '') == group)

@@ -4,6 +4,7 @@ import 'package:get/get.dart';
 import 'package:uuid/uuid.dart';
 
 import '../../services/project_store.dart';
+import '../../services/shared_projects_service.dart';
 
 class ProjectsController extends ProjectsControllerBase {
   @override
@@ -21,6 +22,9 @@ class ProjectsController extends ProjectsControllerBase {
   final _uuid = const Uuid();
 
   ProjectStore get _store => Get.find<ProjectStore>();
+  SharedProjectsService get _shared => Get.find<SharedProjectsService>();
+  SharedProjectsWatchHandle? _watch;
+  Future<void> _loadQueue = Future.value();
 
   static int _compareProjects(Project a, Project b) {
     final an = a.name.trim().toLowerCase();
@@ -34,12 +38,29 @@ class ProjectsController extends ProjectsControllerBase {
   void onInit() {
     super.onInit();
     _load();
+    _watch = _shared.watchProjects(
+      target: target,
+      onChanged: () {
+        _loadQueue = _loadQueue.then((_) async {
+          await _load();
+        });
+      },
+    );
+  }
+
+  @override
+  void onClose() {
+    try {
+      _watch?.cancel();
+    } catch (_) {}
+    _watch = null;
+    super.onClose();
   }
 
   Future<void> _load() async {
     isBusy.value = true;
     try {
-      final loaded = await _store.loadProjects(targetKey: target.targetKey);
+      final loaded = await _shared.loadProjects(target: target);
       final next = loaded.toList(growable: true)..sort(_compareProjects);
       projects.assignAll(next);
     } finally {
@@ -116,7 +137,7 @@ class ProjectsController extends ProjectsControllerBase {
       ..sort(_compareProjects);
     final capped = next.take(25).toList(growable: false);
     projects.assignAll(capped);
-    await _store.saveProjects(targetKey: target.targetKey, projects: capped);
+    await _shared.saveProjects(target: target, projects: capped);
     await _store.saveLastProjectId(
       targetKey: target.targetKey,
       projectId: project.id,
@@ -131,8 +152,8 @@ class ProjectsController extends ProjectsControllerBase {
     next[idx] = project;
     next.sort(_compareProjects);
     projects.assignAll(next);
-    await _store.saveProjects(
-      targetKey: target.targetKey,
+    await _shared.saveProjects(
+      target: target,
       projects: next.toList(growable: false),
     );
   }
@@ -144,8 +165,8 @@ class ProjectsController extends ProjectsControllerBase {
         .toList(growable: true)
       ..sort(_compareProjects);
     projects.assignAll(next);
-    await _store.saveProjects(
-      targetKey: target.targetKey,
+    await _shared.saveProjects(
+      target: target,
       projects: next.toList(growable: false),
     );
   }

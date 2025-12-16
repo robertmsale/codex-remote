@@ -21,6 +21,7 @@ import '../../services/remote_jobs_store.dart';
 import '../../services/local_ssh_keys_service.dart';
 import '../../services/session_scrollback_service.dart';
 import '../../services/ssh_lifecycle_service.dart';
+import '../../services/shared_projects_service.dart';
 
 class InitialBinding extends Bindings {
   @override
@@ -34,6 +35,7 @@ class InitialBinding extends Bindings {
     );
     Get.put<FieldExecSessionStore>(FieldExecSessionStore(), permanent: true);
     Get.put<ProjectStore>(ProjectStore(), permanent: true);
+    Get.put<SharedProjectsService>(SharedProjectsService(), permanent: true);
     Get.put<ProjectTabsStore>(ProjectTabsStore(), permanent: true);
     Get.put<ConversationStore>(ConversationStore(), permanent: true);
     Get.put<LocalShellService>(LocalShellService(), permanent: true);
