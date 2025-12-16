@@ -3,14 +3,14 @@
 ![FieldExec logo](assets/logo.png)
 ![Screenshot](assets/screenshot.png)
 
-FieldExec is a Flutter app (iOS + Android + macOS) that lets you run Codex CLI “sessions” on your Mac—either **over SSH** (from iOS, Android, or macOS) or **locally** (macOS).
+FieldExec is a Flutter app (iOS + Android + macOS + Linux) that lets you run Codex CLI “sessions” on a machine you control—either **over SSH** (from iOS, Android, macOS, or Linux) or **locally** (macOS/Linux).
 
 It’s designed for concurrency: you can keep multiple projects and multiple sessions running at once, switch between them, and resume past conversations by thread ID.
 
 ## Features
 
-- **Remote mode (iOS + Android + macOS)**: connect to `username@host` over SSH and run `codex exec`.
-- **Local mode (macOS)**: run `codex` directly via local shell execution.
+- **Remote mode (iOS + Android + macOS + Linux)**: connect to `username@host` over SSH and run `codex exec`.
+- **Local mode (macOS + Linux)**: run `codex` directly via local shell execution.
 - **Projects**: save remote/local working directories as “projects”.
 - **Tabs per project**: multiple concurrent agent sessions per project.
 - **Resumable sessions**: `codex exec --json` thread IDs are stored and can be resumed.
@@ -32,15 +32,19 @@ Each user message starts a non-interactive Codex turn:
   - `.field_exec/sessions/<tabId>.log`
 - The app tails that file over SSH and renders events/messages in the chat UI.
 
-On macOS local mode, the app runs `codex` locally and streams stdout/stderr into the chat in the same JSONL format.
+On local mode, the app runs `codex` locally and streams stdout/stderr into the chat in the same JSONL format.
+
+### Remote machine bootstrapping (no install required)
+
+FieldExec **does not need to be installed on the remote machine**. In remote mode it bootstraps per-project state by creating `.field_exec/` files inside the selected project directory (session logs, output schema, and small tracking files). The remote host only needs SSH + Codex CLI (and `tmux` is optional but recommended).
 
 ## Requirements
 
 - Flutter SDK (+ Xcode for iOS/macOS builds, Android SDK for Android builds).
-- Codex CLI installed on the Mac that will run Codex:
-  - Local mode: installed on the same Mac running the app.
-  - Remote mode: installed on the remote Mac host reachable via SSH.
-- SSH server enabled on the remote Mac (System Settings → Sharing → Remote Login).
+- Codex CLI installed on the machine that will run Codex:
+  - Local mode: installed on the same machine running the app.
+  - Remote mode: installed on the remote host reachable via SSH.
+- SSH server enabled on the remote host (macOS: System Settings → Sharing → Remote Login).
 - Optional (recommended): `tmux` installed on the remote host for the best “keep running while disconnected” behavior.
 
 ## Quick Start
@@ -84,10 +88,32 @@ Run macOS:
 flutter run -d macos
 ```
 
+Run Linux:
+
+```bash
+flutter run -d linux
+```
+
 Run iOS (device or simulator):
 
 ```bash
 flutter run -d ios
+```
+
+### Linux setup notes
+
+Flutter’s Linux desktop toolchain is required. On Debian/Ubuntu you typically need:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev
+```
+
+Then enable Linux desktop support (if needed) and verify:
+
+```bash
+flutter config --enable-linux-desktop
+flutter doctor
 ```
 
 ## UI Catalog (widgetbook)
@@ -138,6 +164,7 @@ Currently the app supports **one global key**.
 - Passwords are never stored.
 - Session logs are written into the project under `.field_exec/`.
   - The app automatically adds `.field_exec/` to `.git/info/exclude` before auto-commit so logs/schema don’t get committed.
+- See `SECURITY.md` for security best practices (including SSH hardening and VPN suggestions like WireGuard).
 
 ## Troubleshooting
 
@@ -148,6 +175,15 @@ Currently the app supports **one global key**.
 ## License
 
 MIT. See `LICENSE.md`.
+
+## Contributing
+
+Contributions and audits are welcome.
+
+- Bugs/UX issues: open an issue with repro steps and logs/screenshots when possible.
+- Pull requests: keep changes focused and add/update tests when reasonable.
+- Rust ↔ Dart bindings: if you modify Rinf signal structs, run `rinf gen` before committing.
+- Security issues: please follow `SECURITY.md` (prefer private reporting).
 
 ## Using Rust Inside Flutter
 
