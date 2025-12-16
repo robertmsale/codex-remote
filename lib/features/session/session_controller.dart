@@ -73,6 +73,9 @@ class SessionController extends SessionControllerBase {
   Future<void> _cursorSaveQueue = Future.value();
   Timer? _hashSaveTimer;
   Future<void> _hashSaveQueue = Future.value();
+  Timer? _remoteSshHealthTimer;
+  var _remoteSshHealthInFlight = false;
+  var _remoteSshHealthFailures = 0;
 
   static const _fieldExecDir = '.field_exec';
   String get _schemaRelPath => '$_fieldExecDir/output-schema.json';
@@ -183,11 +186,98 @@ class SessionController extends SessionControllerBase {
     try {
       _tailAutoRestartTimer?.cancel();
     } catch (_) {}
+    try {
+      _remoteSshHealthTimer?.cancel();
+    } catch (_) {}
+    _remoteSshHealthTimer = null;
     _cancelTailOnly();
     _cancelLocalTailOnly();
     chatController.dispose();
     inputController.dispose();
     super.onClose();
+  }
+
+  bool _enableRemoteSshWatchdog() {
+    if (target.local) return false;
+    if (!Platform.isIOS && !Platform.isAndroid) return false;
+    return true;
+  }
+
+  void _ensureRemoteSshWatchdog() {
+    if (!_enableRemoteSshWatchdog()) return;
+    if (_remoteSshHealthTimer != null) return;
+    _remoteSshHealthFailures = 0;
+    _remoteSshHealthInFlight = false;
+
+    _remoteSshHealthTimer = Timer.periodic(
+      const Duration(seconds: 25),
+      (_) {
+        if (isClosed) {
+          _remoteSshHealthTimer?.cancel();
+          _remoteSshHealthTimer = null;
+          return;
+        }
+        if (!_lifecycle.isForeground) return;
+        if (!_isActiveView()) return;
+        if (_tailProc == null) return;
+        if (_remoteSshHealthInFlight) return;
+
+        _remoteSshHealthInFlight = true;
+        unawaited(_runRemoteSshHealthCheck());
+      },
+    );
+  }
+
+  Future<void> _runRemoteSshHealthCheck() async {
+    try {
+      if (target.local) return;
+      final profile = target.profile;
+      if (profile == null) return;
+      final pem =
+          await _storage.read(
+            key: SecureStorageService.sshPrivateKeyPemKey,
+          );
+      if (pem == null || pem.trim().isEmpty) return;
+
+      final res = await _ssh.runCommandWithResult(
+        host: profile.host,
+        port: profile.port,
+        username: profile.username,
+        privateKeyPem: pem,
+        password: _sshPassword,
+        command: _wrapWithShell(profile, 'true'),
+        connectTimeout: const Duration(seconds: 5),
+        timeout: SshService.defaultWatchdogCommandTimeout,
+        retries: 0,
+      );
+
+      if ((res.exitCode ?? 1) == 0) {
+        _remoteSshHealthFailures = 0;
+        return;
+      }
+      _remoteSshHealthFailures++;
+    } catch (_) {
+      _remoteSshHealthFailures++;
+    } finally {
+      _remoteSshHealthInFlight = false;
+    }
+
+    if (_remoteSshHealthFailures < 2) return;
+    _remoteSshHealthFailures = 0;
+
+    try {
+      await _ssh.resetAllConnections(reason: 'watchdog:session_tail');
+    } catch (_) {}
+
+    // Force the tail to restart using a fresh pooled connection.
+    if (_tailProc != null) {
+      await _insertEvent(
+        type: 'ssh_reset',
+        text: 'SSH stalled; reconnecting…',
+      );
+      _cancelTailOnly();
+      _scheduleTailAutoRestart(local: false);
+    }
   }
 
   @override
@@ -1712,6 +1802,12 @@ class SessionController extends SessionControllerBase {
     _tailProc = null;
     _tailStdoutSub = null;
     _tailStderrSub = null;
+    if (_remoteSshHealthTimer != null && _tailProc == null) {
+      try {
+        _remoteSshHealthTimer?.cancel();
+      } catch (_) {}
+      _remoteSshHealthTimer = null;
+    }
   }
 
   void _cancelLocalTailOnly() {
@@ -2793,6 +2889,7 @@ class SessionController extends SessionControllerBase {
     final token = Object();
     _tailToken = token;
     _tailProc = proc;
+    _ensureRemoteSshWatchdog();
 
     _tailStdoutSub = proc.stdoutLines.listen((line) {
       if (line.trim().isEmpty) return;

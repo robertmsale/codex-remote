@@ -9,7 +9,8 @@ use field_exec_api::signals::{
     AuthProvide, AuthRequired, SshAuthorizedKeyRequest, SshAuthorizedKeyResponse, SshCancelStream,
     SshExecRequest, SshExecResponse, SshGenerateKeyRequest, SshGenerateKeyResponse,
     SshInstallPublicKeyRequest, SshInstallPublicKeyResponse, SshStartCommandRequest,
-    SshStartCommandResponse, SshStreamExit, SshStreamLine, SshWriteFileRequest,
+    SshStartCommandResponse, SshStreamExit, SshStreamLine, SshResetAllRequest, SshResetAllResponse,
+    SshWriteFileRequest,
     SshWriteFileResponse,
 };
 use field_exec_rinf::storage::StorageClient;
@@ -67,6 +68,7 @@ impl SshConnectionPool {
                     | std::io::ErrorKind::ConnectionAborted
                     | std::io::ErrorKind::NotConnected
                     | std::io::ErrorKind::UnexpectedEof
+                    | std::io::ErrorKind::TimedOut
             ),
             _ => false,
         }
@@ -82,6 +84,13 @@ impl SshConnectionPool {
 
     async fn remove(&self, key: &PoolKey) {
         self.clients.lock().await.remove(key);
+    }
+
+    async fn clear_all(&self) -> usize {
+        let mut g = self.clients.lock().await;
+        let n = g.len();
+        g.clear();
+        n
     }
 
     async fn connect_key(
@@ -301,6 +310,7 @@ pub async fn run() {
     let exec_rx = SshExecRequest::get_dart_signal_receiver();
     let start_rx = SshStartCommandRequest::get_dart_signal_receiver();
     let write_rx = SshWriteFileRequest::get_dart_signal_receiver();
+    let reset_rx = SshResetAllRequest::get_dart_signal_receiver();
     let gen_rx = SshGenerateKeyRequest::get_dart_signal_receiver();
     let authkey_rx = SshAuthorizedKeyRequest::get_dart_signal_receiver();
     let install_rx = SshInstallPublicKeyRequest::get_dart_signal_receiver();
@@ -338,6 +348,24 @@ pub async fn run() {
                 spawn(async move {
                     let response = handle_write_file(storage, auth, pool, req).await;
                     response.send_signal_to_dart();
+                });
+            }
+            Some(pack) = reset_rx.recv() => {
+                let req = pack.message;
+                let pool = pool.clone();
+                let streams = streams.clone();
+                spawn(async move {
+                    let cleared = pool.clear_all().await;
+                    let reason = req.reason.unwrap_or_else(|| "reset".to_owned());
+                    let cancelled = streams.cancel_all(&reason).await;
+                    SshResetAllResponse {
+                        request_id: req.request_id,
+                        ok: true,
+                        cleared_connections: i32::try_from(cleared).unwrap_or(i32::MAX),
+                        cancelled_streams: i32::try_from(cancelled).unwrap_or(i32::MAX),
+                        error: None,
+                    }
+                    .send_signal_to_dart();
                 });
             }
             Some(pack) = gen_rx.recv() => {
@@ -679,6 +707,21 @@ impl StreamRegistry {
             stream_id,
             error: None,
         }
+    }
+
+    async fn cancel_all(&self, reason: &str) -> usize {
+        let mut g = self.tasks.lock().await;
+        let n = g.len();
+        for (stream_id, handle) in g.drain() {
+            handle.abort();
+            SshStreamExit {
+                stream_id,
+                exit_status: -1,
+                error: Some(reason.to_owned()),
+            }
+            .send_signal_to_dart();
+        }
+        n
     }
 }
 

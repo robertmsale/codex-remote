@@ -9,11 +9,13 @@ import 'package:get/get.dart';
 import 'package:uuid/uuid.dart';
 
 import '../../services/active_session_service.dart';
+import '../../services/app_lifecycle_service.dart';
 import '../../services/conversation_store.dart';
 import '../../services/field_exec_session_store.dart';
 import '../../services/project_store.dart';
 import '../../services/project_tabs_store.dart';
 import '../../services/secure_storage_service.dart';
+import '../../services/ssh_service.dart';
 import '../../rinf/rust_ssh_service.dart';
 import '../session/session_controller.dart';
 
@@ -45,12 +47,18 @@ class ProjectSessionsController extends ProjectSessionsControllerBase {
   String? _sshPassword = '';
   Worker? _activeWorker1;
   Worker? _activeWorker2;
+  Worker? _lifecycleWorker;
+  Timer? _remoteEventsWatchdogTimer;
+  var _remoteEventsHealthInFlight = false;
+  var _remoteEventsHealthFailures = 0;
 
   FieldExecSessionStore get _store => Get.find<FieldExecSessionStore>();
   ProjectTabsStore get _tabsStore => Get.find<ProjectTabsStore>();
   ConversationStore get _conversations => Get.find<ConversationStore>();
   ActiveSessionService get _active => Get.find<ActiveSessionService>();
   ProjectStore get _projects => Get.find<ProjectStore>();
+  AppLifecycleService get _lifecycle => Get.find<AppLifecycleService>();
+  SshService get _ssh => Get.find<SshService>();
 
   static const _devInstructionsRelPath =
       '.field_exec/developer_instructions.txt';
@@ -73,6 +81,18 @@ class ProjectSessionsController extends ProjectSessionsControllerBase {
       tabs,
       (_) => _updateActiveSession(),
     );
+    _lifecycleWorker = ever<AppLifecycleState?>(_lifecycle.stateRx, (state) {
+      if (state == null) return;
+      if (args.target.local) return;
+      if (!Platform.isIOS && !Platform.isAndroid) return;
+      if (state == AppLifecycleState.resumed) {
+        unawaited(_startRemoteEventsTail());
+      } else if (state == AppLifecycleState.paused ||
+          state == AppLifecycleState.inactive ||
+          state == AppLifecycleState.detached) {
+        _stopRemoteEventsTail();
+      }
+    });
     _updateActiveSession();
   }
 
@@ -80,6 +100,8 @@ class ProjectSessionsController extends ProjectSessionsControllerBase {
   void onClose() {
     _activeWorker1?.dispose();
     _activeWorker2?.dispose();
+    _lifecycleWorker?.dispose();
+    _lifecycleWorker = null;
     try {
       _syncDebounce?.cancel();
     } catch (_) {}
@@ -100,8 +122,97 @@ class ProjectSessionsController extends ProjectSessionsControllerBase {
       _remoteEventsTail?.cancel();
     } catch (_) {}
     _remoteEventsTail = null;
+    try {
+      _remoteEventsWatchdogTimer?.cancel();
+    } catch (_) {}
+    _remoteEventsWatchdogTimer = null;
     _active.setActive(null);
     super.onClose();
+  }
+
+  void _stopRemoteEventsTail() {
+    try {
+      _remoteEventsOutSub?.cancel();
+    } catch (_) {}
+    _remoteEventsOutSub = null;
+    try {
+      _remoteEventsErrSub?.cancel();
+    } catch (_) {}
+    _remoteEventsErrSub = null;
+    try {
+      _remoteEventsTail?.cancel();
+    } catch (_) {}
+    _remoteEventsTail = null;
+    try {
+      _remoteEventsWatchdogTimer?.cancel();
+    } catch (_) {}
+    _remoteEventsWatchdogTimer = null;
+    _remoteEventsHealthFailures = 0;
+    _remoteEventsHealthInFlight = false;
+  }
+
+  void _ensureRemoteEventsWatchdog() {
+    if (args.target.local) return;
+    if (!Platform.isIOS && !Platform.isAndroid) return;
+    if (_remoteEventsWatchdogTimer != null) return;
+    _remoteEventsHealthFailures = 0;
+    _remoteEventsHealthInFlight = false;
+
+    _remoteEventsWatchdogTimer = Timer.periodic(
+      const Duration(seconds: 25),
+      (_) {
+        if (args.target.local) return;
+        if (_remoteEventsTail == null) return;
+        if (!_lifecycle.isForeground) return;
+        if (_remoteEventsHealthInFlight) return;
+        _remoteEventsHealthInFlight = true;
+        unawaited(_runRemoteEventsHealthCheck());
+      },
+    );
+  }
+
+  Future<void> _runRemoteEventsHealthCheck() async {
+    try {
+      final profile = args.target.profile;
+      if (profile == null) return;
+      final pem =
+          (await Get.find<SecureStorageService>().read(
+            key: SecureStorageService.sshPrivateKeyPemKey,
+          ))?.trim() ??
+          '';
+      if (pem.isEmpty) return;
+
+      final res = await _ssh.runCommandWithResult(
+        host: profile.host,
+        port: profile.port,
+        username: profile.username,
+        privateKeyPem: pem,
+        password: _sshPassword,
+        command: _wrapWithShell(profile.shell, 'true'),
+        connectTimeout: const Duration(seconds: 5),
+        timeout: SshService.defaultWatchdogCommandTimeout,
+        retries: 0,
+      );
+      if ((res.exitCode ?? 1) == 0) {
+        _remoteEventsHealthFailures = 0;
+        return;
+      }
+      _remoteEventsHealthFailures++;
+    } catch (_) {
+      _remoteEventsHealthFailures++;
+    } finally {
+      _remoteEventsHealthInFlight = false;
+    }
+
+    if (_remoteEventsHealthFailures < 2) return;
+    _remoteEventsHealthFailures = 0;
+    try {
+      await _ssh.resetAllConnections(reason: 'watchdog:project_events');
+    } catch (_) {}
+    _stopRemoteEventsTail();
+    if (_lifecycle.isForeground) {
+      unawaited(_startRemoteEventsTail());
+    }
   }
 
   String _sessionTag(String tabId) =>
@@ -414,17 +525,27 @@ class ProjectSessionsController extends ProjectSessionsControllerBase {
       final remoteCmd =
           'cd ${_shQuote(args.project.path)} && tail -n 0 -F ${_shQuote(_projectEventsJsonlRelPath)}';
 
-      final proc = await RustSshService.startCommand(
+      final proc = await _ssh.startCommand(
         host: profile.host,
         port: profile.port,
         username: profile.username,
+        privateKeyPem: pem,
+        password: _sshPassword,
         command: _wrapWithShell(profile.shell, remoteCmd),
-        privateKeyPemOverride: pem,
         connectTimeout: const Duration(seconds: 10),
-        passwordProvider: null,
+        retries: 1,
       );
 
-      _remoteEventsTail = proc;
+      // Adapt into the rust-backed process type used by this controller.
+      _remoteEventsTail = RustSshCommandProcess(
+        stdoutLines: proc.stdoutLines,
+        stderrLines: proc.stderrLines,
+        exitCode: proc.exitCode,
+        done: proc.done,
+        cancel: proc.cancel,
+      );
+
+      _ensureRemoteEventsWatchdog();
 
       _remoteEventsOutSub = proc.stdoutLines.listen((line) {
         if (line.trim().isEmpty) return;
@@ -432,13 +553,15 @@ class ProjectSessionsController extends ProjectSessionsControllerBase {
         _scheduleReloadSharedTabs();
       });
       _remoteEventsErrSub = proc.stderrLines.listen((_) {});
-      unawaited(
-        proc.done.then((_) {
-          _remoteEventsTail = null;
-          _remoteEventsOutSub = null;
-          _remoteEventsErrSub = null;
-        }),
-      );
+      unawaited(proc.done.catchError((_) {}).whenComplete(() {
+        _remoteEventsTail = null;
+        _remoteEventsOutSub = null;
+        _remoteEventsErrSub = null;
+        if (!_lifecycle.isForeground) return;
+        if (isClosed) return;
+        // Auto-restart if the stream was dropped (common after mobile suspend).
+        unawaited(_startRemoteEventsTail());
+      }));
     } catch (_) {}
   }
 

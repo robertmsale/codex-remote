@@ -20,6 +20,7 @@ import '../../services/notification_service.dart';
 import '../../services/remote_jobs_store.dart';
 import '../../services/local_ssh_keys_service.dart';
 import '../../services/session_scrollback_service.dart';
+import '../../services/ssh_lifecycle_service.dart';
 
 class InitialBinding extends Bindings {
   @override
@@ -51,6 +52,11 @@ class InitialBinding extends Bindings {
       permanent: true,
     );
     lifecycle.start();
+    final sshLifecycle = Get.put<SshLifecycleService>(
+      SshLifecycleService(),
+      permanent: true,
+    );
+    sshLifecycle.start();
 
     Get.lazyPut<ConnectionControllerBase>(() => ConnectionController());
     Get.lazyPut<SettingsControllerBase>(() => SettingsController());

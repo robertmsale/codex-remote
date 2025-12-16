@@ -89,6 +89,21 @@ pub struct SshCancelStream {
 }
 
 #[derive(Deserialize, DartSignal)]
+pub struct SshResetAllRequest {
+    pub request_id: u64,
+    pub reason: Option<String>,
+}
+
+#[derive(Serialize, RustSignal)]
+pub struct SshResetAllResponse {
+    pub request_id: u64,
+    pub ok: bool,
+    pub cleared_connections: i32,
+    pub cancelled_streams: i32,
+    pub error: Option<String>,
+}
+
+#[derive(Deserialize, DartSignal)]
 pub struct SshWriteFileRequest {
     pub request_id: u64,
     pub host: String,

@@ -40,6 +40,7 @@ class RustSshService {
   static final _pendingExec = <Uint64, Completer<RustSshCommandResult>>{};
   static final _pendingWrite = <Uint64, Completer<void>>{};
   static final _pendingStart = <Uint64, Completer<RustSshCommandProcess>>{};
+  static final _pendingResetAll = <Uint64, Completer<void>>{};
   static final _pendingInstall = <Uint64, Completer<void>>{};
   static final _pendingKeyGen = <Uint64, Completer<String>>{};
   static final _pendingAuthorized = <Uint64, Completer<String>>{};
@@ -163,6 +164,17 @@ class RustSshService {
       if (c == null) return;
       if (!resp.ok) {
         c.completeError(resp.error ?? 'SSH write failed');
+      } else {
+        c.complete();
+      }
+    });
+
+    SshResetAllResponse.rustSignalStream.listen((pack) {
+      final resp = pack.message;
+      final c = _pendingResetAll.remove(resp.requestId);
+      if (c == null) return;
+      if (!resp.ok) {
+        c.completeError(resp.error ?? 'SSH reset failed');
       } else {
         c.complete();
       }
@@ -369,6 +381,20 @@ class RustSshService {
               : privateKeyPassphrase,
       comment: comment,
     ).sendSignalToRust();
+    return c.future;
+  }
+
+  static Future<void> resetAllConnections({String? reason}) {
+    start();
+    final requestId = _newRequestId();
+    final c = Completer<void>();
+    _pendingResetAll[requestId] = c;
+
+    SshResetAllRequest(
+      requestId: requestId,
+      reason: (reason == null || reason.trim().isEmpty) ? null : reason.trim(),
+    ).sendSignalToRust();
+
     return c.future;
   }
 

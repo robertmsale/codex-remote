@@ -34,6 +34,7 @@ class SshService {
   static const defaultConnectTimeout = Duration(seconds: 10);
   static const defaultAuthTimeout = Duration(seconds: 10);
   static const defaultCommandTimeout = Duration(minutes: 2);
+  static const defaultWatchdogCommandTimeout = Duration(seconds: 5);
 
   static String _normalizeSshError(Object e) {
     final msg = e.toString();
@@ -49,6 +50,29 @@ class SshService {
       return 'SSH private key is invalid or passphrase is wrong.';
     }
     return msg;
+  }
+
+  static bool _shouldResetPoolForErrorMessage(String msg) {
+    final m = msg.toLowerCase();
+    if (m.contains('ssh command timeout')) return true;
+    if (m.contains('ssh connect timeout')) return true;
+    if (m.contains('brokenpipe') || m.contains('broken pipe')) return true;
+    if (m.contains('connection reset') ||
+        m.contains('connection aborted') ||
+        m.contains('not connected') ||
+        m.contains('unexpected eof')) {
+      return true;
+    }
+    if (m.contains('senderror') || m.contains('channelsenderror')) return true;
+    return false;
+  }
+
+  Future<void> resetAllConnections({String? reason}) async {
+    try {
+      await RustSshService.resetAllConnections(reason: reason);
+    } catch (_) {
+      // Best-effort. Reset is primarily a recovery mechanism.
+    }
   }
 
   Future<String> runCommand({
@@ -122,6 +146,9 @@ class SshService {
         );
       } catch (e) {
         final normalized = _normalizeSshError(e);
+        if (_shouldResetPoolForErrorMessage(normalized) && attempt < retries) {
+          await resetAllConnections(reason: 'retry:$normalized');
+        }
         lastErr = StateError(normalized);
         last = SshCommandResult(stdout: '', stderr: normalized, exitCode: 1);
         if (attempt >= retries) break;
@@ -147,33 +174,45 @@ class SshService {
     String? stdin,
     Duration connectTimeout = defaultConnectTimeout,
     Duration authTimeout = defaultAuthTimeout,
+    int retries = 1,
   }) async {
     if (stdin != null && stdin.isNotEmpty) {
       throw UnsupportedError('stdin is not supported for startCommand');
     }
 
-    try {
-      final proc = await RustSshService.startCommand(
-        host: host,
-        port: port,
-        username: username,
-        command: command,
-        privateKeyPemOverride: privateKeyPem,
-        privateKeyPassphrase: privateKeyPassphrase,
-        connectTimeout: connectTimeout,
-        passwordProvider: password == null ? null : () async => password,
-      );
+    Object? lastErr;
+    for (var attempt = 0; attempt <= retries; attempt++) {
+      try {
+        final proc = await RustSshService.startCommand(
+          host: host,
+          port: port,
+          username: username,
+          command: command,
+          privateKeyPemOverride: privateKeyPem,
+          privateKeyPassphrase: privateKeyPassphrase,
+          connectTimeout: connectTimeout,
+          passwordProvider: password == null ? null : () async => password,
+        );
 
-      return SshCommandProcess(
-        stdoutLines: proc.stdoutLines,
-        stderrLines: proc.stderrLines,
-        exitCode: proc.exitCode,
-        done: proc.done,
-        cancel: proc.cancel,
-      );
-    } catch (e) {
-      throw StateError(_normalizeSshError(e));
+        return SshCommandProcess(
+          stdoutLines: proc.stdoutLines,
+          stderrLines: proc.stderrLines,
+          exitCode: proc.exitCode,
+          done: proc.done,
+          cancel: proc.cancel,
+        );
+      } catch (e) {
+        final normalized = _normalizeSshError(e);
+        lastErr = StateError(normalized);
+        if (_shouldResetPoolForErrorMessage(normalized) && attempt < retries) {
+          await resetAllConnections(reason: 'retry:$normalized');
+        }
+        if (attempt >= retries) break;
+        await Future<void>.delayed(const Duration(milliseconds: 150));
+      }
     }
+    // ignore: only_throw_errors
+    throw lastErr ?? StateError('SSH start failed');
   }
 
   Future<void> writeRemoteFile({
@@ -207,6 +246,9 @@ class SshService {
         return;
       } catch (e) {
         final normalized = _normalizeSshError(e);
+        if (_shouldResetPoolForErrorMessage(normalized) && attempt < retries) {
+          await resetAllConnections(reason: 'retry:$normalized');
+        }
         if (attempt >= retries) {
           throw StateError(normalized);
         }
