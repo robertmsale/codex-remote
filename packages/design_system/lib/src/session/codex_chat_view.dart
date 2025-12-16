@@ -34,7 +34,7 @@ class _CodexChatViewState extends State<CodexChatView> {
       return [caption, path].where((s) => s.trim().isNotEmpty).join('\n');
     }
 
-    if (kind == 'codex_actions') {
+    if (kind == 'codex_actions' || kind == 'codex_actions_consumed') {
       final actions = (meta['actions'] as List?) ?? const [];
       return actions.whereType<Map>().map((a) {
         final label = a['label']?.toString() ?? '';
@@ -238,22 +238,55 @@ class _CodexChatViewState extends State<CodexChatView> {
                   );
                 }
 
-                if (kind == 'codex_actions') {
+                if (kind == 'codex_actions' || kind == 'codex_actions_consumed') {
                   final actions = (meta['actions'] as List?) ?? const [];
                   if (actions.isEmpty) return const SizedBox.shrink();
+                  final groupId = meta['group_id']?.toString() ?? '';
+                  final selectedRaw = meta['selected_action_ids'];
+                  final selected = <String>{
+                    if (selectedRaw is List)
+                      for (final v in selectedRaw)
+                        if (v != null) v.toString(),
+                  };
                   return Wrap(
                     spacing: 8,
                     runSpacing: 8,
                     children: actions.whereType<Map>().map((a) {
+                      final actionId = a['id']?.toString() ?? '';
                       final label = a['label']?.toString() ?? '';
                       final value = a['value']?.toString() ?? '';
+                      final picked =
+                          actionId.isNotEmpty && selected.contains(actionId);
                       return Obx(
-                        () => OutlinedButton(
-                          onPressed: controller.isRunning.value
-                              ? null
-                              : () => controller.sendQuickReply(value),
-                          child: Text(label),
-                        ),
+                        () {
+                          final onPressed =
+                              controller.isRunning.value ||
+                                      picked ||
+                                      value.trim().isEmpty
+                                  ? null
+                                  : () => controller.sendQuickReply(
+                                        value,
+                                        actionId:
+                                            actionId.isEmpty ? null : actionId,
+                                        actionGroupId:
+                                            groupId.isEmpty ? null : groupId,
+                                        actionLabel:
+                                            label.isEmpty ? null : label,
+                                      );
+
+                          if (picked) {
+                            return OutlinedButton.icon(
+                              onPressed: onPressed,
+                              icon: const Icon(Icons.check, size: 18),
+                              label: Text(label),
+                            );
+                          }
+
+                          return OutlinedButton(
+                            onPressed: onPressed,
+                            child: Text(label),
+                          );
+                        },
                       );
                     }).toList(),
                   );

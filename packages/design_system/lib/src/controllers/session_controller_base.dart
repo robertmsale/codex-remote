@@ -17,7 +17,12 @@ abstract class SessionControllerBase extends GetxController {
   Future<User> resolveUser(UserID id);
 
   Future<void> sendText(String text);
-  Future<void> sendQuickReply(String value);
+  Future<void> sendQuickReply(
+    String value, {
+    String? actionId,
+    String? actionGroupId,
+    String? actionLabel,
+  });
   Future<void> resumeThreadById(String id, {String? preview});
   Future<void> reattachIfNeeded({int backfillLines});
   Future<void> refresh();

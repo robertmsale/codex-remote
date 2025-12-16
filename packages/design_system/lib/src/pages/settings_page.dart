@@ -18,6 +18,47 @@ class SettingsPage extends GetView<SettingsControllerBase> {
     }
   }
 
+  static String _scrollbackLabel(int lines) => '$lines lines';
+
+  Future<void> _pickScrollbackLines(BuildContext context) async {
+    const presets = <int>[200, 400, 800, 1600, 4000, 8000, 20000];
+    final picked = await showModalBottomSheet<int>(
+      context: context,
+      showDragHandle: true,
+      builder: (_) {
+        return SafeArea(
+          child: Obx(() {
+            final current = controller.sessionScrollbackLines.value;
+            return Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const ListTile(
+                  title: Text(
+                    'Session scrollback',
+                    style: TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                  subtitle: Text(
+                    'How many JSONL log lines are loaded on open/refresh.',
+                  ),
+                ),
+                for (final v in presets)
+                  ListTile(
+                    title: Text(_scrollbackLabel(v)),
+                    trailing: current == v ? const Icon(Icons.check) : null,
+                    onTap: () => Navigator.of(context).pop(v),
+                  ),
+                const SizedBox(height: 8),
+              ],
+            );
+          }),
+        );
+      },
+    );
+
+    if (picked == null) return;
+    await controller.setSessionScrollbackLines(picked);
+  }
+
   Future<void> _pickThemeMode(BuildContext context) async {
     final picked = await showModalBottomSheet<ThemeMode>(
       context: context,
@@ -88,6 +129,22 @@ class SettingsPage extends GetView<SettingsControllerBase> {
               subtitle: Text(_labelFor(controller.themeMode.value)),
               trailing: const Icon(Icons.chevron_right),
               onTap: () => _pickThemeMode(context),
+            ),
+          ),
+          const Divider(height: 1),
+          const Padding(
+            padding: EdgeInsets.only(left: 16, top: 12, bottom: 4),
+            child: Text(
+              'Sessions',
+              style: TextStyle(fontWeight: FontWeight.w600),
+            ),
+          ),
+          Obx(
+            () => ListTile(
+              title: const Text('Scrollback'),
+              subtitle: Text(_scrollbackLabel(controller.sessionScrollbackLines.value)),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () => _pickScrollbackLines(context),
             ),
           ),
           const Divider(height: 1),

@@ -462,8 +462,16 @@ class MockSettingsController extends SettingsControllerBase {
   final themeMode = ThemeMode.system.obs;
 
   @override
+  final sessionScrollbackLines = 400.obs;
+
+  @override
   Future<void> setThemeMode(ThemeMode mode) async {
     themeMode.value = mode;
+  }
+
+  @override
+  Future<void> setSessionScrollbackLines(int lines) async {
+    sessionScrollbackLines.value = lines;
   }
 }
 
@@ -1115,7 +1123,13 @@ class MockSessionController extends SessionControllerBase {
   }
 
   @override
-  Future<void> sendQuickReply(String value) => sendText(value);
+  Future<void> sendQuickReply(
+    String value, {
+    String? actionId,
+    String? actionGroupId,
+    String? actionLabel,
+  }) =>
+      sendText(value);
 
   @override
   Future<void> loadImageAttachment(CustomMessage message, {int? index}) async {

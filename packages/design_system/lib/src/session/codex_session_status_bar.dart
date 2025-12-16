@@ -58,6 +58,21 @@ class CodexSessionStatusBar extends StatelessWidget {
               onPressed: controller.refresh,
               icon: const Icon(Icons.refresh),
             ),
+            IconButton(
+              tooltip: 'Load older',
+              onPressed:
+                  controller.isLoadingMoreHistory.value ||
+                          !controller.hasMoreHistory.value
+                      ? null
+                      : controller.loadMoreHistory,
+              icon: controller.isLoadingMoreHistory.value
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.expand_less),
+            ),
           ],
         ),
       );

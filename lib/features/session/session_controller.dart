@@ -19,6 +19,7 @@ import '../../services/active_session_service.dart';
 import '../../services/app_lifecycle_service.dart';
 import '../../services/notification_service.dart';
 import '../../services/secure_storage_service.dart';
+import '../../services/session_scrollback_service.dart';
 import '../../services/remote_jobs_store.dart';
 import '../../services/ssh_service.dart';
 
@@ -52,6 +53,8 @@ class SessionController extends SessionControllerBase {
   CustomMessage? _pendingActionsMessage;
   String _lastUserPromptPreview = '';
   bool _repairedExplodedChat = false;
+  final _actionsByGroupId = <String, CustomMessage>{};
+  final _selectedActionIdsByGroupId = <String, Set<String>>{};
   // FieldExec uses key-based SSH for normal operation; password auth is only
   // used for explicit key-install bootstrap flows.
   //
@@ -118,6 +121,7 @@ class SessionController extends SessionControllerBase {
   ActiveSessionService get _activeSession => Get.find<ActiveSessionService>();
   AppLifecycleService get _lifecycle => Get.find<AppLifecycleService>();
   RemoteJobsStore get _remoteJobs => Get.find<RemoteJobsStore>();
+  SessionScrollbackService get _scrollback => Get.find<SessionScrollbackService>();
 
   static const _me = 'user';
   static const _codex = 'codex';
@@ -127,6 +131,9 @@ class SessionController extends SessionControllerBase {
   static const _serverGitCommitType = 'server.git_commit';
   static const _serverGitignoreBootstrapType = 'server.gitignore_bootstrap';
   static const _maxImageBytes = 10 * 1024 * 1024;
+
+  int get _scrollbackLines =>
+      SessionScrollbackService.clampLines(_scrollback.lines);
 
   @override
   void onInit() {
@@ -230,7 +237,7 @@ class SessionController extends SessionControllerBase {
     );
 
     try {
-      await _rehydrateFromAnyLogForThread(threadId: id, maxLines: 300);
+      await _rehydrateFromAnyLogForThread(threadId: id, maxLines: _scrollbackLines);
     } catch (_) {}
   }
 
@@ -365,9 +372,9 @@ class SessionController extends SessionControllerBase {
 
     try {
       if (target.local) {
-        await _rehydrateFromLocalLog(maxLines: 200, logRelPath: _logRelPath);
+        await _rehydrateFromLocalLog(maxLines: _scrollbackLines, logRelPath: _logRelPath);
       } else {
-        await _rehydrateFromRemoteLog(maxLines: 200);
+        await _rehydrateFromRemoteLog(maxLines: _scrollbackLines);
       }
     } catch (_) {}
 
@@ -463,6 +470,7 @@ class SessionController extends SessionControllerBase {
             index: 0,
             animated: false,
           );
+          await _applyRecordedQuickReplySelectionsToChat();
         }
 
         if (focusThreadId != null && foundThreadStart) {
@@ -559,6 +567,7 @@ class SessionController extends SessionControllerBase {
           index: 0,
           animated: false,
         );
+        await _applyRecordedQuickReplySelectionsToChat();
       }
 
       if (focusThreadId != null && foundThreadStart) {
@@ -597,8 +606,40 @@ class SessionController extends SessionControllerBase {
 
   @override
   Future<void> sendText(String text) async {
+    await _sendUserPrompt(text);
+  }
+
+  @override
+  Future<void> sendQuickReply(
+    String value, {
+    String? actionId,
+    String? actionGroupId,
+    String? actionLabel,
+  }) async {
+    await _sendUserPrompt(
+      value,
+      quickReplyActionId: actionId,
+      quickReplyGroupId: actionGroupId,
+      quickReplyLabel: actionLabel,
+    );
+  }
+
+  Future<void> _sendUserPrompt(
+    String text, {
+    String? quickReplyActionId,
+    String? quickReplyGroupId,
+    String? quickReplyLabel,
+  }) async {
     final trimmed = text.trim();
     if (trimmed.isEmpty) return;
+
+    if ((quickReplyActionId ?? '').trim().isNotEmpty &&
+        (quickReplyGroupId ?? '').trim().isNotEmpty) {
+      await _markQuickReplySelected(
+        groupId: quickReplyGroupId!.trim(),
+        actionId: quickReplyActionId!.trim(),
+      );
+    }
 
     await _consumePendingActions();
     _lastUserPromptPreview = trimmed.length > 80
@@ -619,11 +660,11 @@ class SessionController extends SessionControllerBase {
       prompt: trimmed,
       userMessageId: userMessage.id,
       userMessageCreatedAt: createdAt,
+      quickReplyActionId: quickReplyActionId,
+      quickReplyGroupId: quickReplyGroupId,
+      quickReplyLabel: quickReplyLabel,
     );
   }
-
-  @override
-  Future<void> sendQuickReply(String value) => sendText(value);
 
   @override
   Future<void> resetSession() async {
@@ -1285,7 +1326,7 @@ class SessionController extends SessionControllerBase {
         }
       }
 
-      await _rehydrateFromLocalLog(maxLines: 200, logRelPath: _logRelPath);
+      await _rehydrateFromLocalLog(maxLines: _scrollbackLines, logRelPath: _logRelPath);
       // If the job finished while the app was backgrounded/terminated, we may
       // have missed >200 lines; replay any unseen log lines using the cursor.
       try {
@@ -1689,6 +1730,9 @@ class SessionController extends SessionControllerBase {
     required String prompt,
     required String userMessageId,
     required DateTime userMessageCreatedAt,
+    String? quickReplyActionId,
+    String? quickReplyGroupId,
+    String? quickReplyLabel,
   }) async {
     if (isRunning.value) return;
 
@@ -1697,6 +1741,9 @@ class SessionController extends SessionControllerBase {
         prompt: prompt,
         userMessageId: userMessageId,
         userMessageCreatedAt: userMessageCreatedAt,
+        quickReplyActionId: quickReplyActionId,
+        quickReplyGroupId: quickReplyGroupId,
+        quickReplyLabel: quickReplyLabel,
       );
       return;
     }
@@ -1705,6 +1752,9 @@ class SessionController extends SessionControllerBase {
       prompt: prompt,
       userMessageId: userMessageId,
       userMessageCreatedAt: userMessageCreatedAt,
+      quickReplyActionId: quickReplyActionId,
+      quickReplyGroupId: quickReplyGroupId,
+      quickReplyLabel: quickReplyLabel,
     );
   }
 
@@ -1712,6 +1762,9 @@ class SessionController extends SessionControllerBase {
     required String messageId,
     required String text,
     required int createdAtMsUtc,
+    String? quickReplyActionId,
+    String? quickReplyGroupId,
+    String? quickReplyLabel,
   }) {
     final payload = <String, Object?>{
       'type': _clientUserMessageType,
@@ -1719,6 +1772,14 @@ class SessionController extends SessionControllerBase {
       'text': text,
       'created_at_ms_utc': createdAtMsUtc,
     };
+    final qg = (quickReplyGroupId ?? '').trim();
+    final qa = (quickReplyActionId ?? '').trim();
+    if (qg.isNotEmpty && qa.isNotEmpty) {
+      payload['quick_reply_group_id'] = qg;
+      payload['quick_reply_action_id'] = qa;
+      final ql = (quickReplyLabel ?? '').trim();
+      if (ql.isNotEmpty) payload['quick_reply_label'] = ql;
+    }
     final currentThread = threadId.value;
     if (currentThread != null && currentThread.isNotEmpty) {
       payload['thread_id'] = currentThread;
@@ -1765,6 +1826,9 @@ class SessionController extends SessionControllerBase {
     required String logAbsPath,
     required String userMessageId,
     required DateTime userMessageCreatedAt,
+    String? quickReplyActionId,
+    String? quickReplyGroupId,
+    String? quickReplyLabel,
   }) async {
     final profile = target.profile!;
     final pem = await _storage.read(
@@ -1775,6 +1839,9 @@ class SessionController extends SessionControllerBase {
       messageId: userMessageId,
       text: prompt,
       createdAtMsUtc: userMessageCreatedAt.millisecondsSinceEpoch,
+      quickReplyActionId: quickReplyActionId,
+      quickReplyGroupId: quickReplyGroupId,
+      quickReplyLabel: quickReplyLabel,
     );
     final cmd = 'printf %s\\\\n ${_shQuote(line)} >> ${_shQuote(logAbsPath)}';
     await _ssh.runCommandWithResult(
@@ -1834,6 +1901,9 @@ class SessionController extends SessionControllerBase {
     required String prompt,
     required String userMessageId,
     required DateTime userMessageCreatedAt,
+    String? quickReplyActionId,
+    String? quickReplyGroupId,
+    String? quickReplyLabel,
   }) async {
     if (isRunning.value) return;
     isRunning.value = true;
@@ -1878,6 +1948,9 @@ class SessionController extends SessionControllerBase {
           messageId: userMessageId,
           text: prompt,
           createdAtMsUtc: userMessageCreatedAt.millisecondsSinceEpoch,
+          quickReplyActionId: quickReplyActionId,
+          quickReplyGroupId: quickReplyGroupId,
+          quickReplyLabel: quickReplyLabel,
         ),
       );
 
@@ -2087,6 +2160,9 @@ class SessionController extends SessionControllerBase {
     required String prompt,
     required String userMessageId,
     required DateTime userMessageCreatedAt,
+    String? quickReplyActionId,
+    String? quickReplyGroupId,
+    String? quickReplyLabel,
   }) async {
     if (isRunning.value) return;
     isRunning.value = true;
@@ -2169,6 +2245,9 @@ class SessionController extends SessionControllerBase {
         logAbsPath: logAbs,
         userMessageId: userMessageId,
         userMessageCreatedAt: userMessageCreatedAt,
+        quickReplyActionId: quickReplyActionId,
+        quickReplyGroupId: quickReplyGroupId,
+        quickReplyLabel: quickReplyLabel,
       );
 
       final codexArgsTail = CodexCommandBuilder.shellString(
@@ -3005,7 +3084,7 @@ class SessionController extends SessionControllerBase {
       _remoteJobId = stored;
       remoteJobId.value = stored;
 
-      await _rehydrateFromRemoteLog(maxLines: 200);
+      await _rehydrateFromRemoteLog(maxLines: _scrollbackLines);
       // If the job finished while the app was backgrounded/terminated, we may
       // have missed >200 lines; replay any unseen log lines using the cursor.
       try {
@@ -3252,6 +3331,7 @@ class SessionController extends SessionControllerBase {
       }
 
       await chatController.setMessages(backfill, animated: false);
+      await _applyRecordedQuickReplySelectionsToChat();
       if (wasEmpty && backfill.isNotEmpty) {
         _needsScrollToBottom.value = true;
       }
@@ -3525,6 +3605,7 @@ class SessionController extends SessionControllerBase {
     }
 
     await chatController.setMessages(backfill, animated: false);
+    await _applyRecordedQuickReplySelectionsToChat();
     await _maybeCatchUpAutoCommitFromHydratedLog(
       lines: lines,
       startIndex: start,
@@ -3606,6 +3687,7 @@ class SessionController extends SessionControllerBase {
     }
 
     await chatController.setMessages(backfill, animated: false);
+    await _applyRecordedQuickReplySelectionsToChat();
     if (wasEmpty && backfill.isNotEmpty) {
       _needsScrollToBottom.value = true;
     }
@@ -3750,9 +3832,9 @@ class SessionController extends SessionControllerBase {
       _repairedExplodedChat = true;
       try {
         if (target.local) {
-          await _rehydrateFromLocalLog(maxLines: 300, logRelPath: _logRelPath);
+          await _rehydrateFromLocalLog(maxLines: _scrollbackLines, logRelPath: _logRelPath);
         } else {
-          await _rehydrateFromRemoteLog(maxLines: 300);
+          await _rehydrateFromRemoteLog(maxLines: _scrollbackLines);
         }
       } catch (_) {}
       return;
@@ -3961,6 +4043,7 @@ class SessionController extends SessionControllerBase {
     try {
       final decoded = jsonDecode(text);
       if (decoded is Map) {
+        final groupId = _fnv1a64Hex(text);
         final resp = CodexStructuredResponse.fromJson(
           decoded.cast<String, Object?>(),
         );
@@ -4011,6 +4094,7 @@ class SessionController extends SessionControllerBase {
         );
 
         if (resp.actions.isNotEmpty) {
+          final selected = _selectedActionIdsByGroupId[groupId];
           final actionsMessage =
               Message.custom(
                     id: _uuid.v4(),
@@ -4018,6 +4102,9 @@ class SessionController extends SessionControllerBase {
                     createdAt: DateTime.now().toUtc(),
                     metadata: {
                       'kind': 'codex_actions',
+                      'group_id': groupId,
+                      if (selected != null && selected.isNotEmpty)
+                        'selected_action_ids': selected.toList(growable: false),
                       'actions': resp.actions
                           .map(
                             (a) => {
@@ -4031,6 +4118,7 @@ class SessionController extends SessionControllerBase {
                   )
                   as CustomMessage;
           _pendingActionsMessage = actionsMessage;
+          _actionsByGroupId[groupId] = actionsMessage;
           out.add(actionsMessage);
         }
         return out;
@@ -4063,6 +4151,13 @@ class SessionController extends SessionControllerBase {
       final createdAt = createdAtMs is int
           ? DateTime.fromMillisecondsSinceEpoch(createdAtMs, isUtc: true)
           : DateTime.now().toUtc();
+
+      final qg = event['quick_reply_group_id']?.toString().trim() ?? '';
+      final qa = event['quick_reply_action_id']?.toString().trim() ?? '';
+      if (qg.isNotEmpty && qa.isNotEmpty) {
+        _selectedActionIdsByGroupId.putIfAbsent(qg, () => <String>{}).add(qa);
+      }
+
       if (messageId.isNotEmpty &&
           chatController.messages.any((m) => m.id == messageId)) {
         return const [];
@@ -4218,17 +4313,91 @@ class SessionController extends SessionControllerBase {
     _pendingActionsMessage = null;
 
     try {
-      final metadata = Map<String, Object?>.from(pending.metadata ?? const {});
-      metadata['kind'] = 'codex_actions_consumed';
-      metadata['actions'] = const [];
+      final groupId = pending.metadata?['group_id']?.toString().trim() ?? '';
+      final current =
+          groupId.isNotEmpty ? (_actionsByGroupId[groupId] ?? pending) : pending;
+      final metadata = Map<String, Object?>.from(current.metadata ?? const {});
+      metadata['consumed'] = true;
+      metadata['consumed_at_ms_utc'] = DateTime.now().toUtc().millisecondsSinceEpoch;
+      // Keep the original `actions` payload so the buttons remain visible for
+      // scrollback and context; the UI can disable them when `consumed` is set.
 
-      await chatController.updateMessage(
-        pending,
-        pending.copyWith(metadata: metadata),
-      );
+      final updated = current.copyWith(metadata: metadata);
+      await chatController.updateMessage(current, updated);
+
+      if (groupId.isNotEmpty) _actionsByGroupId[groupId] = updated;
     } catch (_) {
       // Best-effort: if the message is gone, ignore.
     }
+  }
+
+  void _rebuildActionsIndexFromChat() {
+    _actionsByGroupId.clear();
+    for (final msg in chatController.messages.whereType<CustomMessage>()) {
+      final meta = msg.metadata ?? const {};
+      final kind = meta['kind']?.toString();
+      if (kind != 'codex_actions' && kind != 'codex_actions_consumed') continue;
+      final group = meta['group_id']?.toString().trim() ?? '';
+      if (group.isEmpty) continue;
+      _actionsByGroupId[group] = msg;
+    }
+  }
+
+  Future<void> _applyRecordedQuickReplySelectionsToChat() async {
+    if (_selectedActionIdsByGroupId.isEmpty) return;
+    _rebuildActionsIndexFromChat();
+
+    for (final entry in _selectedActionIdsByGroupId.entries) {
+      final groupId = entry.key;
+      final ids = entry.value;
+      if (ids.isEmpty) continue;
+      final msg = _actionsByGroupId[groupId];
+      if (msg == null) continue;
+
+      final meta = Map<String, Object?>.from(msg.metadata ?? const {});
+      final currentRaw = meta['selected_action_ids'];
+      final current = <String>{
+        if (currentRaw is List)
+          for (final v in currentRaw)
+            if (v != null) v.toString(),
+      };
+      if (current.containsAll(ids) && meta['consumed'] == true) continue;
+
+      meta['selected_action_ids'] = ids.toList(growable: false);
+      meta['consumed'] = true;
+      final updated = msg.copyWith(metadata: meta);
+      try {
+        await chatController.updateMessage(msg, updated);
+        _actionsByGroupId[groupId] = updated;
+      } catch (_) {}
+    }
+  }
+
+  Future<void> _markQuickReplySelected({
+    required String groupId,
+    required String actionId,
+  }) async {
+    final gid = groupId.trim();
+    final aid = actionId.trim();
+    if (gid.isEmpty || aid.isEmpty) return;
+
+    final set = _selectedActionIdsByGroupId.putIfAbsent(gid, () => <String>{});
+    set.add(aid);
+
+    final msg = _actionsByGroupId[gid];
+    if (msg == null) return;
+
+    final meta = Map<String, Object?>.from(msg.metadata ?? const {});
+    meta['selected_action_ids'] = set.toList(growable: false);
+    meta['consumed'] = true;
+    final updated = msg.copyWith(metadata: meta);
+    try {
+      await chatController.updateMessage(msg, updated);
+      _actionsByGroupId[gid] = updated;
+      if (_pendingActionsMessage?.id == updated.id) {
+        _pendingActionsMessage = updated;
+      }
+    } catch (_) {}
   }
 
   Future<void> _maybeAutoCommit(

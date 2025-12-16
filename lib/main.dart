@@ -6,6 +6,7 @@ import 'package:get/get.dart';
 import 'app/field_exec_app.dart';
 import 'rinf/rust_hosts.dart';
 import 'services/background_work_service.dart';
+import 'services/session_scrollback_service.dart';
 import 'services/theme_mode_service.dart';
 
 Future<void> main() async {
@@ -14,6 +15,11 @@ Future<void> main() async {
   await startRustHosts();
   final theme = Get.put<ThemeModeService>(ThemeModeService(), permanent: true);
   await theme.init();
+  final scrollback = Get.put<SessionScrollbackService>(
+    SessionScrollbackService(),
+    permanent: true,
+  );
+  await scrollback.init();
   await BackgroundWorkService().init();
   runApp(const FieldExecApp());
 }
