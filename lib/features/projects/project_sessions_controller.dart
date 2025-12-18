@@ -1164,16 +1164,16 @@ done
       throw StateError('SSH key required. Set up a key first.');
     }
 
-    await RustSshService.writeRemoteFile(
+    await Get.find<SshService>().writeRemoteFile(
       host: profile.host,
       port: profile.port,
       username: profile.username,
       remotePath: '${args.project.path}/$_devInstructionsRelPath',
       contents: text,
-      privateKeyPemOverride: keyPem,
+      privateKeyPem: keyPem,
       connectTimeout: const Duration(seconds: 10),
-      commandTimeout: const Duration(seconds: 30),
-      passwordProvider: null,
+      timeout: const Duration(seconds: 30),
+      password: null,
     );
   }
 
@@ -1279,19 +1279,19 @@ done
           stderr: 'SSH key required. Set up a key first.',
         );
       }
-      final res = await RustSshService.runCommandWithResult(
+      final res = await Get.find<SshService>().runCommandWithResult(
         host: profile.host,
         port: profile.port,
         username: profile.username,
         command: _wrapWithShell(profile.shell, remoteCmd),
-        privateKeyPemOverride: pem,
+        privateKeyPem: pem,
         connectTimeout: const Duration(seconds: 10),
-        commandTimeout: timeout,
-        passwordProvider: null,
+        timeout: timeout,
+        password: null,
       );
 
       return RunCommandResult(
-        exitCode: res.exitCode,
+        exitCode: res.exitCode ?? 1,
         stdout: res.stdout,
         stderr: res.stderr,
       );

@@ -5,6 +5,7 @@ import '../args/project_args.dart';
 import '../controllers/projects_controller_base.dart';
 import '../models/project.dart';
 import '../routes/design_routes.dart';
+import '../services/project_window_launcher.dart';
 
 class ProjectsPage extends GetView<ProjectsControllerBase> {
   const ProjectsPage({super.key});
@@ -238,8 +239,16 @@ class ProjectsPage extends GetView<ProjectsControllerBase> {
                   }
                 },
               ),
-              onTap: () {
+              onTap: () async {
                 final args = ProjectArgs(target: controller.target, project: p);
+                final launcher =
+                    Get.isRegistered<ProjectWindowLauncher>()
+                        ? Get.find<ProjectWindowLauncher>()
+                        : null;
+                if (launcher != null && launcher.enabled) {
+                  await launcher.openProject(args);
+                  return;
+                }
                 Get.toNamed(DesignRoutes.project, arguments: args);
               },
             );

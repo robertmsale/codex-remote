@@ -22,13 +22,30 @@ import '../../services/local_ssh_keys_service.dart';
 import '../../services/session_scrollback_service.dart';
 import '../../services/ssh_lifecycle_service.dart';
 import '../../services/shared_projects_service.dart';
+import '../../services/field_execd_client.dart';
+import '../../services/desktop_project_window_launcher.dart';
+import '../../services/startup_project_args_service.dart';
 
 class InitialBinding extends Bindings {
+  final ProjectArgs? startupProjectArgs;
+
+  InitialBinding({this.startupProjectArgs});
+
   @override
   void dependencies() {
     Get.put<SecureStorageService>(SecureStorageService(), permanent: true);
-    Get.put<SshService>(SshService(), permanent: true);
-    Get.put<SshKeyService>(SshKeyService(), permanent: true);
+    if (FieldExecdClient.supported) {
+      Get.put<FieldExecdClient>(FieldExecdClient(), permanent: true);
+    }
+    final daemon = Get.isRegistered<FieldExecdClient>()
+        ? Get.find<FieldExecdClient>()
+        : null;
+    Get.put<SshService>(SshService(daemon: daemon), permanent: true);
+    Get.put<SshKeyService>(SshKeyService(daemon: daemon), permanent: true);
+    Get.put<StartupProjectArgsService>(
+      StartupProjectArgsService(projectArgs: startupProjectArgs),
+      permanent: true,
+    );
     Get.put<ConnectionHistoryService>(
       ConnectionHistoryService(),
       permanent: true,
@@ -59,6 +76,13 @@ class InitialBinding extends Bindings {
       permanent: true,
     );
     sshLifecycle.start();
+
+    if (FieldExecdClient.supported) {
+      Get.put<ProjectWindowLauncher>(
+        DesktopProjectWindowLauncher(),
+        permanent: true,
+      );
+    }
 
     Get.lazyPut<ConnectionControllerBase>(() => ConnectionController());
     Get.lazyPut<SettingsControllerBase>(() => SettingsController());

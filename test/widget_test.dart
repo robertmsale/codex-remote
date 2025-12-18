@@ -12,7 +12,11 @@ import 'package:field_exec/app/field_exec_app.dart';
 void main() {
   testWidgets('App boots to connection screen', (WidgetTester tester) async {
     await tester.pumpWidget(const FieldExecApp());
-    await tester.pumpAndSettle();
+    // Avoid pumpAndSettle here because some background services/plugins may
+    // keep the microtask queue active on desktop.
+    for (var i = 0; i < 20; i++) {
+      await tester.pump(const Duration(milliseconds: 50));
+    }
 
     expect(find.text('FieldExec'), findsOneWidget);
     final hasRemoteField = find.text('username@host').evaluate().isNotEmpty;

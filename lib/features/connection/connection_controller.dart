@@ -4,7 +4,6 @@ import 'package:flutter/material.dart';
 import 'package:design_system/design_system.dart';
 import 'package:get/get.dart';
 
-import '../../rinf/rust_ssh_service.dart';
 import '../../services/connection_history_service.dart';
 import '../../services/local_ssh_keys_service.dart';
 import '../../services/secure_storage_service.dart';
@@ -487,7 +486,7 @@ class ConnectionController extends ConnectionControllerBase {
         return;
       }
 
-      final res = await RustSshService.runCommandWithResult(
+      final res = await _ssh.runCommandWithResult(
         host: host,
         port: port,
         username: username,
@@ -496,9 +495,9 @@ class ConnectionController extends ConnectionControllerBase {
             ? null
             : privateKeyPassphrase,
         connectTimeout: const Duration(seconds: 10),
-        commandTimeout: const Duration(seconds: 10),
-        privateKeyPemOverride: pem,
-        passwordProvider: null,
+        timeout: const Duration(seconds: 10),
+        privateKeyPem: pem,
+        password: null,
       );
 
       status.value = 'SSH OK: ${res.stdout.trim()}';

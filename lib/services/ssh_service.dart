@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import '../rinf/rust_ssh_service.dart';
+import 'field_execd_client.dart';
 
 class SshCommandResult {
   final String stdout;
@@ -31,6 +32,10 @@ class SshCommandProcess {
 }
 
 class SshService {
+  final FieldExecdClient? _daemon;
+
+  SshService({FieldExecdClient? daemon}) : _daemon = daemon;
+
   static const defaultConnectTimeout = Duration(seconds: 10);
   static const defaultAuthTimeout = Duration(seconds: 10);
   static const defaultCommandTimeout = Duration(minutes: 2);
@@ -68,6 +73,18 @@ class SshService {
   }
 
   Future<void> resetAllConnections({String? reason}) async {
+    final daemon = _daemon;
+    if (daemon != null && FieldExecdClient.supported) {
+      try {
+        await daemon.request(
+          method: 'ssh.reset_all',
+          params: <String, Object?>{'reason': reason},
+        );
+      } catch (_) {
+        // Best-effort. Reset is primarily a recovery mechanism.
+      }
+      return;
+    }
     try {
       await RustSshService.resetAllConnections(reason: reason);
     } catch (_) {
@@ -127,6 +144,32 @@ class SshService {
           throw UnsupportedError('stdin is not supported via RustSshService.runCommandWithResult');
         }
 
+        final daemon = _daemon;
+        if (daemon != null && FieldExecdClient.supported) {
+          final target = _daemonTarget(
+            host: host,
+            port: port,
+            username: username,
+            password: password,
+            privateKeyPem: privateKeyPem,
+            privateKeyPassphrase: privateKeyPassphrase,
+          );
+          final res = await daemon.request(
+            method: 'ssh.exec',
+            params: <String, Object?>{
+              'target': target,
+              'command': command,
+              'connect_timeout_ms': connectTimeout.inMilliseconds,
+              'command_timeout_ms': timeout.inMilliseconds,
+            },
+          );
+          return SshCommandResult(
+            stdout: (res['stdout'] as String?) ?? '',
+            stderr: (res['stderr'] as String?) ?? '',
+            exitCode: (res['exit_code'] as num?)?.toInt(),
+          );
+        }
+
         final res = await RustSshService.runCommandWithResult(
           host: host,
           port: port,
@@ -183,6 +226,33 @@ class SshService {
     Object? lastErr;
     for (var attempt = 0; attempt <= retries; attempt++) {
       try {
+        final daemon = _daemon;
+        if (daemon != null && FieldExecdClient.supported) {
+          final target = _daemonTarget(
+            host: host,
+            port: port,
+            username: username,
+            password: password,
+            privateKeyPem: privateKeyPem,
+            privateKeyPassphrase: privateKeyPassphrase,
+          );
+          final stream = await daemon.startStream(
+            method: 'ssh.start',
+            params: <String, Object?>{
+              'target': target,
+              'command': command,
+              'connect_timeout_ms': connectTimeout.inMilliseconds,
+            },
+          );
+          return SshCommandProcess(
+            stdoutLines: stream.stdoutLines,
+            stderrLines: stream.stderrLines,
+            exitCode: stream.exitCode.then((v) => v),
+            done: stream.done,
+            cancel: () => daemon.cancelStream(stream.streamId),
+          );
+        }
+
         final proc = await RustSshService.startCommand(
           host: host,
           port: port,
@@ -231,6 +301,29 @@ class SshService {
   }) async {
     for (var attempt = 0; attempt <= retries; attempt++) {
       try {
+        final daemon = _daemon;
+        if (daemon != null && FieldExecdClient.supported) {
+          final target = _daemonTarget(
+            host: host,
+            port: port,
+            username: username,
+            password: password,
+            privateKeyPem: privateKeyPem,
+            privateKeyPassphrase: privateKeyPassphrase,
+          );
+          await daemon.request(
+            method: 'ssh.write_file',
+            params: <String, Object?>{
+              'target': target,
+              'remote_path': remotePath,
+              'contents': contents,
+              'connect_timeout_ms': connectTimeout.inMilliseconds,
+              'command_timeout_ms': timeout.inMilliseconds,
+            },
+          );
+          return;
+        }
+
         await RustSshService.writeRemoteFile(
           host: host,
           port: port,
@@ -265,6 +358,20 @@ class SshService {
     String? privateKeyPassphrase,
     String comment = 'field-exec',
   }) {
+    final daemon = _daemon;
+    if (daemon != null && FieldExecdClient.supported) {
+      return daemon.request(
+        method: 'ssh.install_public_key',
+        params: <String, Object?>{
+          'user_at_host': userAtHost,
+          'port': port,
+          'password': password,
+          'private_key_pem': privateKeyPem,
+          'private_key_passphrase': privateKeyPassphrase,
+          'comment': comment,
+        },
+      ).then((_) => null);
+    }
     return RustSshService.installPublicKey(
       userAtHost: userAtHost,
       port: port,
@@ -273,5 +380,43 @@ class SshService {
       privateKeyPassphrase: privateKeyPassphrase,
       comment: comment,
     );
+  }
+
+  static Map<String, Object?> _daemonTarget({
+    required String host,
+    required int port,
+    required String username,
+    String? password,
+    String? privateKeyPem,
+    String? privateKeyPassphrase,
+  }) {
+    final pem = (privateKeyPem ?? '').trim();
+    if (pem.isNotEmpty) {
+      return <String, Object?>{
+        'host': host,
+        'port': port,
+        'username': username,
+        'auth': <String, Object?>{
+          'kind': 'key',
+          'private_key_pem': pem,
+          'private_key_passphrase': privateKeyPassphrase,
+        },
+      };
+    }
+
+    final pwd = (password ?? '').trim();
+    if (pwd.isEmpty) {
+      throw StateError('SSH key required. Set up a key first.');
+    }
+
+    return <String, Object?>{
+      'host': host,
+      'port': port,
+      'username': username,
+      'auth': <String, Object?>{
+        'kind': 'password',
+        'password': pwd,
+      },
+    };
   }
 }

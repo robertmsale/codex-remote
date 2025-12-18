@@ -7,7 +7,9 @@ import 'routes/app_pages.dart';
 import '../services/theme_mode_service.dart';
 
 class FieldExecApp extends StatelessWidget {
-  const FieldExecApp({super.key});
+  final ProjectArgs? startupProjectArgs;
+
+  const FieldExecApp({super.key, this.startupProjectArgs});
 
   @override
   Widget build(BuildContext context) {
@@ -22,8 +24,10 @@ class FieldExecApp extends StatelessWidget {
         theme: DesignSystemThemes.light(),
         darkTheme: DesignSystemThemes.dark(),
         themeMode: ThemeMode.system,
-        initialBinding: InitialBinding(),
-        initialRoute: DesignRoutes.connect,
+        initialBinding: InitialBinding(startupProjectArgs: startupProjectArgs),
+        initialRoute: startupProjectArgs == null
+            ? DesignRoutes.connect
+            : DesignRoutes.project,
         getPages: AppPages.pages,
       );
     }
@@ -35,8 +39,10 @@ class FieldExecApp extends StatelessWidget {
         theme: DesignSystemThemes.light(),
         darkTheme: DesignSystemThemes.dark(),
         themeMode: service.modeRx.value,
-        initialBinding: InitialBinding(),
-        initialRoute: DesignRoutes.connect,
+        initialBinding: InitialBinding(startupProjectArgs: startupProjectArgs),
+        initialRoute: startupProjectArgs == null
+            ? DesignRoutes.connect
+            : DesignRoutes.project,
         getPages: AppPages.pages,
       ),
     );

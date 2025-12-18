@@ -3,6 +3,7 @@ import 'package:design_system/design_system.dart';
 
 import '../../features/projects/projects_controller.dart';
 import '../../features/projects/project_sessions_controller.dart';
+import '../../services/startup_project_args_service.dart';
 
 abstract final class AppPages {
   static final pages = <GetPage<dynamic>>[
@@ -21,7 +22,14 @@ abstract final class AppPages {
       name: DesignRoutes.project,
       page: ProjectSessionsPage.new,
       binding: BindingsBuilder(() {
-        final args = Get.arguments as ProjectArgs;
+        final raw = Get.arguments;
+        final args =
+            (raw is ProjectArgs)
+                ? raw
+                : Get.find<StartupProjectArgsService>().projectArgs;
+        if (args == null) {
+          throw StateError('Missing ProjectArgs.');
+        }
         Get.put<ProjectSessionsControllerBase>(ProjectSessionsController(args: args));
       }),
     ),

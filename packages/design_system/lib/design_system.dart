@@ -33,3 +33,5 @@ export 'src/theme/design_system_themes.dart';
 export 'src/git/git_tools_sheet.dart';
 export 'src/git/git_compare_commits_sheet.dart';
 export 'src/git/git_compare_worktrees_sheet.dart';
+
+export 'src/services/project_window_launcher.dart';
