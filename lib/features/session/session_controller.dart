@@ -2334,9 +2334,15 @@ class SessionController extends SessionControllerBase {
         'LOG=${_shQuote(logAbs)}',
         'ERR=${_shQuote(errAbs)}',
         'exec >> "\$LOG" 2>> "\$ERR"',
+        '',
+        '# Optional per-project environment hook.',
+        // Note: aliases generally do not expand in non-interactive shells; use
+        // POSIX functions or wrapper scripts instead.
+        'ENV_SH=".field_exec/env.sh"',
+        'if [ -f "\$ENV_SH" ]; then . "\$ENV_SH"; fi',
         'mkdir -p ${_shQuote(_fieldExecDir)} >/dev/null 2>&1 || true',
         'touch ${_shQuote(_devInstructionsRelPath)} >/dev/null 2>&1 || true',
-        'CODEX_BIN="\$(command -v codex 2>/dev/null || true)"',
+        'if [ -z "\${CODEX_BIN:-}" ]; then CODEX_BIN="\$(command -v codex 2>/dev/null || true)"; fi',
         'if [ -z "\$CODEX_BIN" ]; then echo "codex not found" >&2; exit 127; fi',
         'JQ_BIN="\$(command -v jq 2>/dev/null || true)"',
         'PLUTIL_BIN="\$(command -v plutil 2>/dev/null || true)"',
@@ -2626,9 +2632,15 @@ class SessionController extends SessionControllerBase {
         'LOG=${_shQuote(logAbs)}',
         'ERR=${_shQuote(errAbs)}',
         'exec >> "\$LOG" 2>> "\$ERR"',
+        '',
+        '# Optional per-project environment hook.',
+        // Note: aliases generally do not expand in non-interactive shells; use
+        // POSIX functions or wrapper scripts instead.
+        'ENV_SH=".field_exec/env.sh"',
+        'if [ -f "\$ENV_SH" ]; then . "\$ENV_SH"; fi',
         'mkdir -p ${_shQuote(_fieldExecDir)} >/dev/null 2>&1 || true',
         'touch ${_shQuote(_devInstructionsRelPath)} >/dev/null 2>&1 || true',
-        'CODEX_BIN="\$(command -v codex 2>/dev/null || true)"',
+        'if [ -z "\${CODEX_BIN:-}" ]; then CODEX_BIN="\$(command -v codex 2>/dev/null || true)"; fi',
         'if [ -z "\$CODEX_BIN" ]; then',
         '  for p in /opt/homebrew/bin/codex /usr/local/bin/codex "\$HOME/.local/bin/codex" /usr/bin/codex; do',
         '    if [ -x "\$p" ]; then CODEX_BIN="\$p"; break; fi',
