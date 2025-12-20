@@ -1,18 +1,18 @@
-import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
-import 'package:flutter_paste_input/flutter_paste_input.dart';
 
 class FieldExecPasteService {
   FieldExecPasteService._();
 
   static final FieldExecPasteService instance = FieldExecPasteService._();
 
+  static const MethodChannel _channel = MethodChannel('field_exec/paste');
+
   bool _initialized = false;
-  StreamSubscription<PastePayload>? _sub;
   TextEditingController? _activeController;
+  TextEditingController? _lastKnownController;
 
   void ensureInitialized() {
     if (_initialized) return;
@@ -20,12 +20,28 @@ class FieldExecPasteService {
 
     if (!Platform.isMacOS) return;
 
-    PasteChannel.instance.initialize();
-    _sub = PasteChannel.instance.onPaste.listen(_onPaste);
+    _channel.setMethodCallHandler((call) async {
+      if (call.method != 'pasteText') return;
+      final args = (call.arguments is Map)
+          ? Map<String, dynamic>.from(call.arguments as Map)
+          : const <String, dynamic>{};
+      final text = (args['text'] as String?) ?? '';
+      if (text.isEmpty) return;
+
+      final controller = _activeController ?? _lastKnownController;
+      if (controller == null) return;
+
+      try {
+        _insertText(controller, text);
+      } catch (_) {
+        // If the controller is disposed or otherwise invalid, ignore.
+      }
+    });
   }
 
   void setActive(TextEditingController controller) {
     _activeController = controller;
+    _lastKnownController = controller;
   }
 
   void clearActive(TextEditingController controller) {
@@ -35,45 +51,9 @@ class FieldExecPasteService {
   }
 
   void dispose() {
-    _sub?.cancel();
-    _sub = null;
     _activeController = null;
+    _lastKnownController = null;
     _initialized = false;
-  }
-
-  void _onPaste(PastePayload payload) {
-    if (payload is! TextPaste) return;
-    final text = payload.text;
-    if (text.isEmpty) return;
-
-    // Wispr Flow uses Cmd+Ctrl+V. Only intercept when that modifier combo is
-    // currently held to avoid double-inserting on normal Cmd+V.
-    if (!_isCmdCtrlHeld()) return;
-
-    final controller = _activeController;
-    if (controller == null) return;
-
-    try {
-      _insertText(controller, text);
-    } catch (_) {
-      // If the controller is disposed or otherwise invalid, ignore.
-    }
-  }
-
-  bool _isCmdCtrlHeld() {
-    final keys = HardwareKeyboard.instance.logicalKeysPressed;
-
-    final hasCmd =
-        keys.contains(LogicalKeyboardKey.metaLeft) ||
-        keys.contains(LogicalKeyboardKey.metaRight) ||
-        keys.contains(LogicalKeyboardKey.meta);
-
-    final hasCtrl =
-        keys.contains(LogicalKeyboardKey.controlLeft) ||
-        keys.contains(LogicalKeyboardKey.controlRight) ||
-        keys.contains(LogicalKeyboardKey.control);
-
-    return hasCmd && hasCtrl;
   }
 
   void _insertText(TextEditingController controller, String insert) {

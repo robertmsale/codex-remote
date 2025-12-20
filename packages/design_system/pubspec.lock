@@ -150,14 +150,6 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "6.0.0"
-  flutter_paste_input:
-    dependency: "direct main"
-    description:
-      name: flutter_paste_input
-      sha256: cbb13e0b7a3b934b6d19be3465cfc7a8102951b5dce1d2fbbee564ff81c6b182
-      url: "https://pub.dev"
-    source: hosted
-    version: "1.0.0"
   flutter_test:
     dependency: "direct dev"
     description: flutter
