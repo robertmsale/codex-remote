@@ -279,29 +279,36 @@ class ConnectionController extends ConnectionControllerBase {
   }
 
   Future<String?> _promptForPassword() async {
-    var value = '';
-    return Get.dialog<String>(
-      AlertDialog(
-        title: const Text('Password required'),
-        content: TextField(
-          obscureText: true,
-          autofocus: true,
-          decoration: const InputDecoration(labelText: 'Password'),
-          onChanged: (v) => value = v,
-          onSubmitted: (v) => Get.back(result: v),
+    final controller = TextEditingController();
+    try {
+      return await Get.dialog<String>(
+        AlertDialog(
+          title: const Text('Password required'),
+          content: FieldExecPasteTarget(
+            controller: controller,
+            child: TextField(
+              controller: controller,
+              obscureText: true,
+              autofocus: true,
+              decoration: const InputDecoration(labelText: 'Password'),
+              onSubmitted: (v) => Get.back(result: v),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Get.back(result: null),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Get.back(result: controller.text),
+              child: const Text('Connect'),
+            ),
+          ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Get.back(result: null),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Get.back(result: value),
-            child: const Text('Connect'),
-          ),
-        ],
-      ),
-    );
+      );
+    } finally {
+      controller.dispose();
+    }
   }
 
   ConnectionProfile? _parseProfile() {

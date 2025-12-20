@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../controllers/project_sessions_controller_base.dart';
+import '../paste/field_exec_paste_input.dart';
 import 'project_file_viewer_sheet.dart';
 
 class _Entry {
@@ -414,26 +415,29 @@ class _ProjectFileExplorerSheetState extends State<ProjectFileExplorerSheet> {
             Row(
               children: [
                 Expanded(
-                  child: TextField(
+                  child: FieldExecPasteTarget(
                     controller: _search,
-                    decoration: InputDecoration(
-                      prefixIcon: const Icon(Icons.search),
-                      hintText: 'Fuzzy find by filename…',
-                      border: const OutlineInputBorder(),
-                      suffixIcon: (_query.trim().isEmpty)
-                          ? null
-                          : IconButton(
-                              tooltip: 'Clear',
-                              onPressed: () {
-                                _search.clear();
-                                setState(() {
-                                  _query = '';
-                                  _searchResults = const [];
-                                  _searchError = null;
-                                });
-                              },
-                              icon: const Icon(Icons.clear),
-                            ),
+                    child: TextField(
+                      controller: _search,
+                      decoration: InputDecoration(
+                        prefixIcon: const Icon(Icons.search),
+                        hintText: 'Fuzzy find by filename…',
+                        border: const OutlineInputBorder(),
+                        suffixIcon: (_query.trim().isEmpty)
+                            ? null
+                            : IconButton(
+                                tooltip: 'Clear',
+                                onPressed: () {
+                                  _search.clear();
+                                  setState(() {
+                                    _query = '';
+                                    _searchResults = const [];
+                                    _searchError = null;
+                                  });
+                                },
+                                icon: const Icon(Icons.clear),
+                              ),
+                      ),
                     ),
                   ),
                 ),

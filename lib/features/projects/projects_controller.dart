@@ -79,20 +79,26 @@ class ProjectsController extends ProjectsControllerBase {
           content: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              TextField(
+              FieldExecPasteTarget(
                 controller: pathController,
-                autofocus: true,
-                decoration: const InputDecoration(
-                  labelText: 'Path',
-                  hintText: '/Users/me/repo or /home/me/repo',
+                child: TextField(
+                  controller: pathController,
+                  autofocus: true,
+                  decoration: const InputDecoration(
+                    labelText: 'Path',
+                    hintText: '/Users/me/repo or /home/me/repo',
+                  ),
                 ),
               ),
               const SizedBox(height: 12),
-              TextField(
+              FieldExecPasteTarget(
                 controller: nameController,
-                decoration: const InputDecoration(
-                  labelText: 'Name (optional)',
-                  hintText: 'my-repo',
+                child: TextField(
+                  controller: nameController,
+                  decoration: const InputDecoration(
+                    labelText: 'Name (optional)',
+                    hintText: 'my-repo',
+                  ),
                 ),
               ),
             ],

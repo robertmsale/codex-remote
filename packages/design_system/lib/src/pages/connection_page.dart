@@ -5,6 +5,7 @@ import 'package:get/get.dart';
 
 import '../controllers/connection_controller_base.dart';
 import '../models/connection_profile.dart';
+import '../paste/field_exec_paste_input.dart';
 
 enum _BootstrapStep {
   method,
@@ -291,12 +292,15 @@ class _ConnectionPageState extends State<ConnectionPage> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        TextField(
+        FieldExecPasteTarget(
           controller: _bootstrapPem,
-          maxLines: 12,
-          decoration: const InputDecoration(
-            labelText: 'Private key PEM',
-            hintText: 'Paste an OpenSSH private key PEM here',
+          child: TextField(
+            controller: _bootstrapPem,
+            maxLines: 12,
+            decoration: const InputDecoration(
+              labelText: 'Private key PEM',
+              hintText: 'Paste an OpenSSH private key PEM here',
+            ),
           ),
         ),
         const SizedBox(height: 12),
@@ -324,26 +328,35 @@ class _ConnectionPageState extends State<ConnectionPage> {
   Widget _bootstrapStepConnectionDetails() {
     return Column(
       children: [
-        TextField(
+        FieldExecPasteTarget(
           controller: controller.userAtHostController,
-          textInputAction: TextInputAction.next,
-          decoration: const InputDecoration(
-            labelText: 'username@host',
-            hintText: 'robert@mac.local',
+          child: TextField(
+            controller: controller.userAtHostController,
+            textInputAction: TextInputAction.next,
+            decoration: const InputDecoration(
+              labelText: 'username@host',
+              hintText: 'robert@mac.local',
+            ),
           ),
         ),
         const SizedBox(height: 12),
-        TextField(
+        FieldExecPasteTarget(
           controller: controller.portController,
-          keyboardType: TextInputType.number,
-          textInputAction: TextInputAction.next,
-          decoration: const InputDecoration(labelText: 'Port'),
+          child: TextField(
+            controller: controller.portController,
+            keyboardType: TextInputType.number,
+            textInputAction: TextInputAction.next,
+            decoration: const InputDecoration(labelText: 'Port'),
+          ),
         ),
         const SizedBox(height: 12),
-        TextField(
+        FieldExecPasteTarget(
           controller: _bootstrapPassword,
-          obscureText: true,
-          decoration: const InputDecoration(labelText: 'Password'),
+          child: TextField(
+            controller: _bootstrapPassword,
+            obscureText: true,
+            decoration: const InputDecoration(labelText: 'Password'),
+          ),
         ),
         const SizedBox(height: 16),
         Row(
@@ -431,20 +444,26 @@ class _ConnectionPageState extends State<ConnectionPage> {
           _modePicker(),
         ],
         const SizedBox(height: 16),
-        TextField(
+        FieldExecPasteTarget(
           controller: controller.userAtHostController,
-          textInputAction: TextInputAction.next,
-          decoration: const InputDecoration(
-            labelText: 'username@host',
-            hintText: 'robert@mac.local',
+          child: TextField(
+            controller: controller.userAtHostController,
+            textInputAction: TextInputAction.next,
+            decoration: const InputDecoration(
+              labelText: 'username@host',
+              hintText: 'robert@mac.local',
+            ),
           ),
         ),
         const SizedBox(height: 12),
-        TextField(
+        FieldExecPasteTarget(
           controller: controller.portController,
-          keyboardType: TextInputType.number,
-          textInputAction: TextInputAction.next,
-          decoration: const InputDecoration(labelText: 'Port'),
+          child: TextField(
+            controller: controller.portController,
+            keyboardType: TextInputType.number,
+            textInputAction: TextInputAction.next,
+            decoration: const InputDecoration(labelText: 'Port'),
+          ),
         ),
         const SizedBox(height: 12),
         Obx(

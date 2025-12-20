@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../controllers/project_sessions_controller_base.dart';
+import '../paste/field_exec_paste_input.dart';
 import 'git_tools_sheet.dart';
 
 class GitCompareCommitsSheet extends StatefulWidget {
@@ -399,11 +400,14 @@ class _CommitPicker extends StatelessWidget {
           onChanged: onChanged,
         ),
         const SizedBox(height: 8),
-        TextField(
+        FieldExecPasteTarget(
           controller: controller,
-          decoration: const InputDecoration(
-            labelText: 'Or enter ref',
-            hintText: 'HEAD~1, main, <sha>',
+          child: TextField(
+            controller: controller,
+            decoration: const InputDecoration(
+              labelText: 'Or enter ref',
+              hintText: 'HEAD~1, main, <sha>',
+            ),
           ),
         ),
       ],

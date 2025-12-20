@@ -53,6 +53,7 @@ dependencies:
   meta: ^1.17.0
   tuple: ^2.0.2
   desktop_multi_window: ^0.3.0
+  flutter_paste_input: ^1.0.0
 
 dev_dependencies:
   flutter_test:

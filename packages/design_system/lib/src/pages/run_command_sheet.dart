@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../controllers/project_sessions_controller_base.dart';
+import '../paste/field_exec_paste_input.dart';
 
 class RunCommandSheet extends StatefulWidget {
   final String hintText;
@@ -91,15 +92,18 @@ class _RunCommandSheetState extends State<RunCommandSheet> {
               ],
             ),
             const SizedBox(height: 8),
-            TextField(
+            FieldExecPasteTarget(
               controller: _commandController,
-              autofocus: true,
-              textInputAction: TextInputAction.done,
-              decoration: InputDecoration(
-                hintText: widget.hintText,
-                border: const OutlineInputBorder(),
+              child: TextField(
+                controller: _commandController,
+                autofocus: true,
+                textInputAction: TextInputAction.done,
+                decoration: InputDecoration(
+                  hintText: widget.hintText,
+                  border: const OutlineInputBorder(),
+                ),
+                onSubmitted: (_) => _run(),
               ),
-              onSubmitted: (_) => _run(),
             ),
             const SizedBox(height: 10),
             Row(

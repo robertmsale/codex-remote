@@ -4,6 +4,7 @@ import 'package:get/get.dart';
 import '../args/project_args.dart';
 import '../controllers/projects_controller_base.dart';
 import '../models/project.dart';
+import '../paste/field_exec_paste_input.dart';
 import '../routes/design_routes.dart';
 import '../services/project_window_launcher.dart';
 
@@ -14,58 +15,71 @@ class ProjectsPage extends GetView<ProjectsControllerBase> {
     BuildContext context, {
     required String initialValue,
   }) async {
-    var value = initialValue;
-    return showDialog<String>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Rename project'),
-        content: TextFormField(
-          initialValue: initialValue,
-          autofocus: true,
-          textInputAction: TextInputAction.done,
-          decoration: const InputDecoration(labelText: 'Project name'),
-          onChanged: (v) => value = v,
-          onFieldSubmitted: (v) => Navigator.of(context).pop(v),
+    final controller = TextEditingController(text: initialValue);
+    try {
+      return await showDialog<String>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Rename project'),
+          content: FieldExecPasteTarget(
+            controller: controller,
+            child: TextField(
+              controller: controller,
+              autofocus: true,
+              textInputAction: TextInputAction.done,
+              decoration: const InputDecoration(labelText: 'Project name'),
+              onSubmitted: (_) => Navigator.of(context).pop(controller.text),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(context).pop(controller.text),
+              child: const Text('Save'),
+            ),
+          ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(context).pop(value),
-            child: const Text('Save'),
-          ),
-        ],
-      ),
-    );
+      );
+    } finally {
+      controller.dispose();
+    }
   }
 
   Future<String?> _promptNewGroupName(BuildContext context) async {
-    var value = '';
-    return showDialog<String>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('New group'),
-        content: TextFormField(
-          autofocus: true,
-          textInputAction: TextInputAction.done,
-          decoration: const InputDecoration(labelText: 'Group name'),
-          onChanged: (v) => value = v,
-          onFieldSubmitted: (v) => Navigator.of(context).pop(v),
+    final controller = TextEditingController();
+    try {
+      return await showDialog<String>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('New group'),
+          content: FieldExecPasteTarget(
+            controller: controller,
+            child: TextField(
+              controller: controller,
+              autofocus: true,
+              textInputAction: TextInputAction.done,
+              decoration: const InputDecoration(labelText: 'Group name'),
+              onSubmitted: (_) => Navigator.of(context).pop(controller.text),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(context).pop(controller.text),
+              child: const Text('Create'),
+            ),
+          ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(context).pop(value),
-            child: const Text('Create'),
-          ),
-        ],
-      ),
-    );
+      );
+    } finally {
+      controller.dispose();
+    }
   }
 
   Future<String?> _pickGroupForProject({
@@ -241,10 +255,9 @@ class ProjectsPage extends GetView<ProjectsControllerBase> {
               ),
               onTap: () async {
                 final args = ProjectArgs(target: controller.target, project: p);
-                final launcher =
-                    Get.isRegistered<ProjectWindowLauncher>()
-                        ? Get.find<ProjectWindowLauncher>()
-                        : null;
+                final launcher = Get.isRegistered<ProjectWindowLauncher>()
+                    ? Get.find<ProjectWindowLauncher>()
+                    : null;
                 if (launcher != null && launcher.enabled) {
                   await launcher.openProject(args);
                   return;

@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
 import '../controllers/keys_controller_base.dart';
+import '../paste/field_exec_paste_input.dart';
 import 'install_key_page.dart';
 
 class KeysPage extends GetView<KeysControllerBase> {
@@ -93,11 +94,14 @@ class KeysPage extends GetView<KeysControllerBase> {
               style: TextStyle(fontWeight: FontWeight.w600),
             ),
             const SizedBox(height: 8),
-            TextField(
+            FieldExecPasteTarget(
               controller: controller.pemController,
-              maxLines: 10,
-              decoration: const InputDecoration(
-                hintText: 'Paste an OpenSSH private key PEM here',
+              child: TextField(
+                controller: controller.pemController,
+                maxLines: 10,
+                decoration: const InputDecoration(
+                  hintText: 'Paste an OpenSSH private key PEM here',
+                ),
               ),
             ),
             const SizedBox(height: 12),

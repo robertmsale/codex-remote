@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
 import '../controllers/install_key_controller_base.dart';
+import '../paste/field_exec_paste_input.dart';
 
 class InstallKeyPage extends GetView<InstallKeyControllerBase> {
   const InstallKeyPage({super.key});
@@ -14,24 +15,33 @@ class InstallKeyPage extends GetView<InstallKeyControllerBase> {
         child: ListView(
           padding: const EdgeInsets.all(16),
           children: [
-            TextField(
+            FieldExecPasteTarget(
               controller: controller.targetController,
-              decoration: const InputDecoration(
-                labelText: 'username@host',
-                hintText: 'robert@mac.local',
+              child: TextField(
+                controller: controller.targetController,
+                decoration: const InputDecoration(
+                  labelText: 'username@host',
+                  hintText: 'robert@mac.local',
+                ),
               ),
             ),
             const SizedBox(height: 12),
-            TextField(
+            FieldExecPasteTarget(
               controller: controller.portController,
-              keyboardType: TextInputType.number,
-              decoration: const InputDecoration(labelText: 'Port'),
+              child: TextField(
+                controller: controller.portController,
+                keyboardType: TextInputType.number,
+                decoration: const InputDecoration(labelText: 'Port'),
+              ),
             ),
             const SizedBox(height: 12),
-            TextField(
+            FieldExecPasteTarget(
               controller: controller.passwordController,
-              obscureText: true,
-              decoration: const InputDecoration(labelText: 'Password'),
+              child: TextField(
+                controller: controller.passwordController,
+                obscureText: true,
+                decoration: const InputDecoration(labelText: 'Password'),
+              ),
             ),
             const SizedBox(height: 16),
             Obx(
@@ -57,4 +67,3 @@ class InstallKeyPage extends GetView<InstallKeyControllerBase> {
     );
   }
 }
-

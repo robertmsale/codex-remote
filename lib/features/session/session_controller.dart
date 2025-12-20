@@ -1730,21 +1730,24 @@ class SessionController extends SessionControllerBase {
   Future<String?> _promptForPassword() async {
     final controller = TextEditingController();
     try {
-      return await Get.dialog<String>(
-        AlertDialog(
-          title: const Text('SSH password'),
-          content: TextField(
-            controller: controller,
-            obscureText: true,
-            autofocus: true,
-            decoration: const InputDecoration(labelText: 'Password'),
-            onSubmitted: (_) => Get.back(result: controller.text),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Get.back(result: null),
-              child: const Text('Cancel'),
-            ),
+	      return await Get.dialog<String>(
+	        AlertDialog(
+	          title: const Text('SSH password'),
+	          content: FieldExecPasteTarget(
+	            controller: controller,
+	            child: TextField(
+	              controller: controller,
+	              obscureText: true,
+	              autofocus: true,
+	              decoration: const InputDecoration(labelText: 'Password'),
+	              onSubmitted: (_) => Get.back(result: controller.text),
+	            ),
+	          ),
+	          actions: [
+	            TextButton(
+	              onPressed: () => Get.back(result: null),
+	              child: const Text('Cancel'),
+	            ),
             FilledButton(
               onPressed: () => Get.back(result: controller.text),
               child: const Text('Continue'),

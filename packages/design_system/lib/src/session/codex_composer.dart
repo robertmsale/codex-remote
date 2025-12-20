@@ -4,6 +4,7 @@ import 'package:get/get.dart';
 import 'package:provider/provider.dart';
 
 import '../controllers/session_controller_base.dart';
+import '../paste/field_exec_paste_input.dart';
 
 class CodexComposer extends StatefulWidget {
   final SessionControllerBase controller;
@@ -105,23 +106,26 @@ class _CodexComposerState extends State<CodexComposer> {
                   children: [
                     Expanded(
                       child: Obx(
-                        () => TextField(
+                        () => FieldExecPasteTarget(
                           controller: _text,
-                          focusNode: widget.controller.inputFocusNode,
-                          enabled: !widget.controller.isRunning.value,
-                          decoration: const InputDecoration(
-                            hintText: 'Message Codex…',
-                            border: InputBorder.none,
+                          child: TextField(
+                            controller: _text,
+                            focusNode: widget.controller.inputFocusNode,
+                            enabled: !widget.controller.isRunning.value,
+                            decoration: const InputDecoration(
+                              hintText: 'Message Codex…',
+                              border: InputBorder.none,
+                            ),
+                            onTap: () {
+                              FocusScope.of(
+                                context,
+                              ).requestFocus(widget.controller.inputFocusNode);
+                            },
+                            keyboardType: TextInputType.multiline,
+                            textInputAction: TextInputAction.newline,
+                            minLines: 1,
+                            maxLines: 6,
                           ),
-                          onTap: () {
-                            FocusScope.of(
-                              context,
-                            ).requestFocus(widget.controller.inputFocusNode);
-                          },
-                          keyboardType: TextInputType.multiline,
-                          textInputAction: TextInputAction.newline,
-                          minLines: 1,
-                          maxLines: 6,
                         ),
                       ),
                     ),

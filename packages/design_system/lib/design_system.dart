@@ -35,3 +35,5 @@ export 'src/git/git_compare_commits_sheet.dart';
 export 'src/git/git_compare_worktrees_sheet.dart';
 
 export 'src/services/project_window_launcher.dart';
+
+export 'src/paste/field_exec_paste_input.dart';
